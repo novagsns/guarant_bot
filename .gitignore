@@ -1,0 +1,39 @@
+﻿# env/secrets
+.env
+.env.*
+!.env.example
+
+# data/runtime
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# keys/certs
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.dist-info/
+.venv/
+venv/
+
+# tooling/backups
+.backup_before_format.zip
+*.bak
+*.tmp
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,45 @@
+"""Module for init functionality."""
+
+from bot.db.base import Base
+from bot.db.models import (
+    Ad,
+    BroadcastRequest,
+    Complaint,
+    Deal,
+    Dispute,
+    Game,
+    RouletteSpin,
+    Review,
+    Scammer,
+    ScammerEvidence,
+    Service,
+    ServicePurchase,
+    StaffTask,
+    SupportMessage,
+    SupportTicket,
+    TopUp,
+    User,
+    WalletTransaction,
+)
+
+__all__ = [
+    "Base",
+    "Ad",
+    "Complaint",
+    "Deal",
+    "Dispute",
+    "Game",
+    "Review",
+    "Service",
+    "ServicePurchase",
+    "Scammer",
+    "ScammerEvidence",
+    "SupportTicket",
+    "SupportMessage",
+    "BroadcastRequest",
+    "RouletteSpin",
+    "StaffTask",
+    "TopUp",
+    "User",
+    "WalletTransaction",
+]
