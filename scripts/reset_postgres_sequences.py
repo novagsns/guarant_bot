@@ -31,7 +31,7 @@ async def reset_sequences() -> None:
             await conn.execute(
                 text(
                     f"SELECT setval('{seq}', "
-                    f"(SELECT COALESCE(MAX(id), 1) FROM \"{table.name}\"), true)"
+                    f'(SELECT COALESCE(MAX(id), 1) FROM "{table.name}"), true)'
                 )
             )
     await engine.dispose()

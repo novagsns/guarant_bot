@@ -277,9 +277,7 @@ async def _log_member_event(
 
 
 @router.message(F.text == "/mod_chat_add")
-async def mod_chat_add(
-    message: Message, sessionmaker: async_sessionmaker
-) -> None:
+async def mod_chat_add(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Добавляет текущий чат в модерацию."""
     if message.chat.type not in {"group", "supergroup"}:
         return
@@ -296,9 +294,7 @@ async def mod_chat_add(
 
 
 @router.message(F.text == "/mod_chat_remove")
-async def mod_chat_remove(
-    message: Message, sessionmaker: async_sessionmaker
-) -> None:
+async def mod_chat_remove(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Убирает текущий чат из модерации."""
     if message.chat.type not in {"group", "supergroup"}:
         return
@@ -328,9 +324,7 @@ async def cmd_ban(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. Используйте /mod_chat_add."
-        )
+        await message.answer("Чат не в списке модерации. Используйте /mod_chat_add.")
         return
     if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
         await message.answer("Нет доступа.")
@@ -602,10 +596,7 @@ async def cmd_warn(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. "
-            "Используйте /mod_chat_add."
-        )
+        await message.answer("Чат не в списке модерации. " "Используйте /mod_chat_add.")
         return
     if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
         await message.answer("Нет доступа.")
@@ -615,8 +606,7 @@ async def cmd_warn(
     target_id, reason = _parse_target_and_reason(message, parts[1:])
     if not target_id:
         await message.answer(
-            "Формат: /warn <user_id> [причина] "
-            "или ответом на сообщение."
+            "Формат: /warn <user_id> [причина] " "или ответом на сообщение."
         )
         return
 
@@ -674,8 +664,7 @@ async def cmd_warn(
         except Exception:
             pass
         await message.answer(
-            f"Пользователь получил "
-            f"предупреждение ({warn_count}/3)."
+            f"Пользователь получил " f"предупреждение ({warn_count}/3)."
         )
         return
 
@@ -689,10 +678,7 @@ async def cmd_warn(
             until_date=until_date,
         )
     except Exception:
-        await message.answer(
-            "Не удалось замутить "
-            "после 3 предупреждений."
-        )
+        await message.answer("Не удалось замутить " "после 3 предупреждений.")
         return
 
     auto_reason = (
@@ -758,8 +744,7 @@ async def cmd_warn(
     except Exception:
         pass
     await message.answer(
-        "Пользователь получил 3 "
-        "предупреждения и замучен на 7 дней."
+        "Пользователь получил 3 " "предупреждения и замучен на 7 дней."
     )
 
 
@@ -1237,8 +1222,7 @@ async def moderate_chat(
                     message.from_user.id,
                     "chat_ban",
                     -20,
-                    record.reason
-                    or "Бан в чате",
+                    record.reason or "Бан в чате",
                     ref_type="restriction",
                     ref_id=record.id,
                 )

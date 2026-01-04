@@ -145,7 +145,9 @@ async def info_staff(callback: CallbackQuery, sessionmaker: async_sessionmaker) 
         title = role_label(role)
         names = []
         for member in members:
-            names.append(f"@{member.username}" if member.username else f"id:{member.id}")
+            names.append(
+                f"@{member.username}" if member.username else f"id:{member.id}"
+            )
         lines.append(f"💼 <b>{title}</b>")
         lines.append(f"• {', '.join(names)}")
 

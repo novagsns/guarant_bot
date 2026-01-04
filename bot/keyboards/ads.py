@@ -30,25 +30,21 @@ def game_list_kb(
         for game_id, name in games
     ]
     if include_all:
-        rows.append([InlineKeyboardButton(text="Все игры", callback_data=f"{prefix}:0")])
+        rows.append(
+            [InlineKeyboardButton(text="Все игры", callback_data=f"{prefix}:0")]
+        )
     if total_pages > 1:
         nav = []
         if page > 1:
             nav.append(
-                InlineKeyboardButton(
-                    text="⬅️", callback_data=f"game_page:{page - 1}"
-                )
+                InlineKeyboardButton(text="⬅️", callback_data=f"game_page:{page - 1}")
             )
         nav.append(
-            InlineKeyboardButton(
-                text=f"{page}/{total_pages}", callback_data="noop"
-            )
+            InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop")
         )
         if page < total_pages:
             nav.append(
-                InlineKeyboardButton(
-                    text="➡️", callback_data=f"game_page:{page + 1}"
-                )
+                InlineKeyboardButton(text="➡️", callback_data=f"game_page:{page + 1}")
             )
         rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)

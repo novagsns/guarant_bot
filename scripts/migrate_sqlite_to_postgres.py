@@ -105,7 +105,7 @@ async def _reset_postgres_sequences(dest_conn: AsyncConnection) -> None:
         await dest_conn.execute(
             text(
                 f"SELECT setval('{seq}', "
-                f"(SELECT COALESCE(MAX(id), 1) FROM \"{table.name}\"), true)"
+                f'(SELECT COALESCE(MAX(id), 1) FROM "{table.name}"), true)'
             )
         )
 

@@ -260,14 +260,15 @@ async def _send_deals_archive(
             query = query.where(Deal.status == status)
         if since:
             query = query.where(Deal.created_at >= since)
-        result = await session.execute(
-            query.order_by(Deal.id.desc()).limit(20)
-        )
+        result = await session.execute(query.order_by(Deal.id.desc()).limit(20))
         deals = result.scalars().all()
 
     header = f"🗄 Архив сделок — статус: {status}, период: {period}"
     if not deals:
-        await callback.message.answer(header + "\n\nСделок не найдено.", reply_markup=_deals_archive_kb(status, period))
+        await callback.message.answer(
+            header + "\n\nСделок не найдено.",
+            reply_markup=_deals_archive_kb(status, period),
+        )
         await callback.answer()
         return
 
@@ -311,12 +312,12 @@ def _is_profile_button_text(message: Message) -> bool:
     if not message.text:
         return False
     text = message.text.strip()
-    profile_label = "\U0001F464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c"
+    profile_label = "\U0001f464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c"
     if text == profile_label:
         return True
     if "\u041f\u0440\u043e\u0444\u0438\u043b\u044c" in text or "Profile" in text:
         return True
-    if text.startswith("\U0001F464"):
+    if text.startswith("\U0001f464"):
         return True
     normalized = re.sub(r"[^\w\u0400-\u04FF]+", "", text).lower()
     return "\u043f\u0440\u043e\u0444\u0438\u043b\u044c" in normalized
@@ -602,9 +603,7 @@ async def profile_deals_archive(
     callback: CallbackQuery, sessionmaker: async_sessionmaker
 ) -> None:
     """Show deals archive with filters."""
-    await _send_deals_archive(
-        callback, sessionmaker, status="closed", period="30d"
-    )
+    await _send_deals_archive(callback, sessionmaker, status="closed", period="30d")
 
 
 @router.callback_query(F.data.startswith("deals_archive:"))

@@ -1061,7 +1061,6 @@ async def owner_set_role_value(
     )
 
 
-
 @router.message(F.text.startswith("/fire"))
 async def fire_staff(
     message: Message,
@@ -1090,7 +1089,7 @@ async def fire_staff(
                 await message.answer("Usage: /fire user_id or reply")
                 return
             target = parts[1].strip()
-            if target.startswith("@"): 
+            if target.startswith("@"):
                 username = target[1:]
                 result = await session.execute(
                     select(User).where(User.username == username)
@@ -1391,7 +1390,6 @@ async def mod_reject_reason(
 
 
 @router.callback_query(F.data == "moderator:complaints")
-
 async def moderator_complaints(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
@@ -2679,8 +2677,7 @@ async def broadcast_approve(
                 failed += 1
 
         await callback.message.answer(
-            f"Рассылка одобрена. Отправлено: {sent}. "
-            f"Ошибки: {failed}."
+            f"Рассылка одобрена. Отправлено: {sent}. " f"Ошибки: {failed}."
         )
         async with sessionmaker() as session:
             result = await session.execute(
@@ -2690,7 +2687,7 @@ async def broadcast_approve(
 
         if mod_chats:
             pretty = (
-                "\U0001F4E3 <b>\u0420\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430</b>\n"
+                "\U0001f4e3 <b>\u0420\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430</b>\n"
                 f"ID: {request_id}\n"
                 f"\u0422\u0438\u043f: {req_kind}\n"
                 f"\u0410\u0432\u0442\u043e\u0440: {req_creator}\n"
@@ -2705,6 +2702,8 @@ async def broadcast_approve(
                     continue
 
     asyncio.create_task(_run_broadcast())
+
+
 @router.callback_query(F.data.startswith("broadcast_reject:"))
 async def broadcast_reject(
     callback: CallbackQuery,

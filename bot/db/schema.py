@@ -113,7 +113,9 @@ async def _ensure_ads_media_columns(conn: AsyncConnection, dialect_name: str) ->
         )
 
 
-async def _ensure_user_profile_columns(conn: AsyncConnection, dialect_name: str) -> None:
+async def _ensure_user_profile_columns(
+    conn: AsyncConnection, dialect_name: str
+) -> None:
     """Handle ensure user profile columns.
 
     Args:
@@ -316,7 +318,9 @@ async def _ensure_wallet_tx_columns(conn: AsyncConnection, dialect_name: str) ->
         )
 
 
-async def _ensure_service_media_columns(conn: AsyncConnection, dialect_name: str) -> None:
+async def _ensure_service_media_columns(
+    conn: AsyncConnection, dialect_name: str
+) -> None:
     """Handle ensure service media columns.
 
     Args:
@@ -477,9 +481,7 @@ async def _ensure_deal_columns(conn: AsyncConnection, dialect_name: str) -> None
         )
 
 
-async def _ensure_deal_room_table(
-    conn: AsyncConnection, dialect_name: str
-) -> None:
+async def _ensure_deal_room_table(conn: AsyncConnection, dialect_name: str) -> None:
     """Ensure deal_rooms table exists."""
     if dialect_name == "sqlite":
         result = await conn.execute(
@@ -532,9 +534,7 @@ async def _ensure_deal_room_table(
         )
 
 
-async def _ensure_deal_message_table(
-    conn: AsyncConnection, dialect_name: str
-) -> None:
+async def _ensure_deal_message_table(conn: AsyncConnection, dialect_name: str) -> None:
     """Ensure deal_messages table exists."""
     if dialect_name == "sqlite":
         result = await conn.execute(
@@ -609,9 +609,7 @@ async def _ensure_dispute_columns(conn: AsyncConnection, dialect_name: str) -> N
         await conn.execute(text("ALTER TABLE disputes ADD COLUMN winner_id INTEGER"))
 
 
-async def _ensure_review_unique_index(
-    conn: AsyncConnection, dialect_name: str
-) -> None:
+async def _ensure_review_unique_index(conn: AsyncConnection, dialect_name: str) -> None:
     """Handle ensure review unique index.
 
     Args:

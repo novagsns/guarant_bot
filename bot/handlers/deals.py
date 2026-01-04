@@ -245,11 +245,10 @@ def _extract_deal_id_from_reply(message: Message) -> int | None:
     return _extract_deal_id(reply.text or reply.caption)
 
 
-async def _send_deal_window(
-    message: Message, *, deal_id: int, role: str
-) -> None:
+async def _send_deal_window(message: Message, *, deal_id: int, role: str) -> None:
     """Send a deal window message for reply-based chat."""
     await message.answer(_build_deal_window_text(deal_id, role))
+
 
 def _message_type_from_message(message: Message, *, base: str | None = None) -> str:
     """Resolve message type for logging."""
@@ -299,9 +298,7 @@ def _is_room_member_status(status: str) -> bool:
 def _deal_room_invite_kb(invite_link: str) -> InlineKeyboardMarkup:
     """Build a button that opens the deal room invite link."""
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Open deal chat", url=invite_link)]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="Open deal chat", url=invite_link)]]
     )
 
 
@@ -409,9 +406,7 @@ async def _send_deal_room_intro(
         buyer = await session.get(User, deal.buyer_id)
         seller = await session.get(User, deal.seller_id)
         guarantor = (
-            await session.get(User, deal.guarantee_id)
-            if deal.guarantee_id
-            else None
+            await session.get(User, deal.guarantee_id) if deal.guarantee_id else None
         )
 
     buyer_label = await _format_user(buyer) if buyer else "id:-"
@@ -1307,7 +1302,6 @@ async def take_deal(
 
     await callback.answer("Сделка назначена на вас.")
 
-
     if room_error:
         await callback.bot.send_message(
             guarantor.id,
@@ -1654,9 +1648,7 @@ async def open_chat(
 
 
 @router.message(F.text == "/deals")
-async def list_active_deals(
-    message: Message, sessionmaker: async_sessionmaker
-) -> None:
+async def list_active_deals(message: Message, sessionmaker: async_sessionmaker) -> None:
     """List active deals for quick chat access."""
     async with sessionmaker() as session:
         result = await session.execute(
@@ -1694,6 +1686,7 @@ async def switch_deal_chat(
     )
     return
 
+
 @router.message(F.text.startswith("/deal_log"))
 async def deal_log(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Show deal message log."""
@@ -1712,7 +1705,11 @@ async def deal_log(message: Message, sessionmaker: async_sessionmaker) -> None:
         if not deal:
             await message.answer("Deal not found.")
             return
-        if message.from_user.id not in {deal.buyer_id, deal.seller_id, deal.guarantee_id}:
+        if message.from_user.id not in {
+            deal.buyer_id,
+            deal.seller_id,
+            deal.guarantee_id,
+        }:
             await message.answer("No access.")
             return
         result = await session.execute(
@@ -1760,7 +1757,6 @@ async def deal_log(message: Message, sessionmaker: async_sessionmaker) -> None:
             )
         else:
             await message.answer(f"{prefix} {text}".strip())
-
 
     deal, role, error = await _resolve_deal_chat(
         sessionmaker, deal_id, message.from_user.id
@@ -1962,34 +1958,24 @@ async def deal_data_send(
         file_id=file_id,
     )
 
-    header = (
-        "⚠️ <b>ДАННЫЕ ПО СДЕЛКЕ</b>\n"
-        f"Сделка #{deal_id}\n"
-        f"От: {role_name}"
-    )
+    header = "⚠️ <b>ДАННЫЕ ПО СДЕЛКЕ</b>\n" f"Сделка #{deal_id}\n" f"От: {role_name}"
     prefix = f"{role_name}:"
     if message.photo:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_photo(
             deal.guarantee_id,
             message.photo[-1].file_id,
             caption="📎 Данные",
         )
     elif message.video:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_video(
             deal.guarantee_id,
             message.video.file_id,
             caption="📎 Данные",
         )
     elif message.document:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_document(
             deal.guarantee_id,
             message.document.file_id,
@@ -2065,34 +2051,24 @@ async def deal_payment_send(
         file_id=file_id,
     )
 
-    header = (
-        "💸 <b>ОПЛАТА ПО СДЕЛКЕ</b>\n"
-        f"Сделка #{deal_id}\n"
-        f"От: {role_name}"
-    )
+    header = "💸 <b>ОПЛАТА ПО СДЕЛКЕ</b>\n" f"Сделка #{deal_id}\n" f"От: {role_name}"
     prefix = f"{role_name}:"
     if message.photo:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_photo(
             deal.guarantee_id,
             message.photo[-1].file_id,
             caption="📎 Оплата",
         )
     elif message.video:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_video(
             deal.guarantee_id,
             message.video.file_id,
             caption="📎 Оплата",
         )
     elif message.document:
-        await message.bot.send_message(
-            deal.guarantee_id, header, parse_mode="HTML"
-        )
+        await message.bot.send_message(deal.guarantee_id, header, parse_mode="HTML")
         await message.bot.send_document(
             deal.guarantee_id,
             message.document.file_id,
@@ -2322,9 +2298,7 @@ async def _relay_deal_message(
 
 
 @router.message(_is_deal_window_reply)
-async def relay_chat_reply(
-    message: Message, sessionmaker: async_sessionmaker
-) -> None:
+async def relay_chat_reply(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Relay a reply to a deal window without entering chat state."""
     await message.answer(
         "Deal chat inside the bot is disabled. Use the deal room link."

@@ -34,7 +34,6 @@ from bot.keyboards.ads import (
 )
 from bot.keyboards.common import deals_menu_kb, exchange_menu_kb
 from bot.utils.scammers import find_scammer
-from bot.utils.vip import is_vip_until
 
 router = Router()
 
@@ -163,9 +162,7 @@ async def _notify_moderators(
     if not moderators:
         return
 
-    expected_emojis = (
-        _count_custom_emoji_html(text) if parse_mode == "HTML" else 0
-    )
+    expected_emojis = _count_custom_emoji_html(text) if parse_mode == "HTML" else 0
     reported = False
 
     for mod in moderators:
@@ -359,11 +356,7 @@ async def _send_ads(
         total = total or 0
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = min(page, total_pages)
-        query = (
-            select(Ad, Game)
-            .join(Game, Game.id == Ad.game_id)
-            .where(*filters)
-        )
+        query = select(Ad, Game).join(Game, Game.id == Ad.game_id).where(*filters)
         if ad_kind == "sale":
             query = query.order_by(
                 Ad.promoted_at.is_(None),
@@ -524,7 +517,11 @@ async def _show_games_page(
     await message.answer(
         "🎮 Выберите игру для фильтра:",
         reply_markup=game_list_kb(
-            games, prefix="filter_game", page=page, total_pages=total_pages, include_all=True
+            games,
+            prefix="filter_game",
+            page=page,
+            total_pages=total_pages,
+            include_all=True,
         ),
     )
 
@@ -612,9 +609,7 @@ async def account_filter(
 
 
 @router.callback_query(F.data.startswith("ads_page:"))
-async def ads_page(
-    callback: CallbackQuery, sessionmaker: async_sessionmaker
-) -> None:
+async def ads_page(callback: CallbackQuery, sessionmaker: async_sessionmaker) -> None:
     """Handle ads pagination."""
     parts = callback.data.split(":")
     if len(parts) != 6:
