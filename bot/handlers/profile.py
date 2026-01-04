@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import html
+import re
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
@@ -168,6 +169,8 @@ def _status_label(value: str | None) -> str:
         "in_progress": "в работе",
         "completed": "завершена",
         "cancelled": "отменена",
+        "closed": "завершена",
+        "canceled": "отменена",
     }
     return mapping.get(value or "", value or "-")
 
@@ -191,6 +194,97 @@ def _deal_type_label(value: str | None) -> str:
     return mapping.get(value or "", value or "-")
 
 
+def _deals_archive_kb(status: str, period: str) -> InlineKeyboardMarkup:
+    """Build archive filters keyboard."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Все", callback_data=f"deals_archive:all:{period}"
+                ),
+                InlineKeyboardButton(
+                    text="Закрытые", callback_data=f"deals_archive:closed:{period}"
+                ),
+                InlineKeyboardButton(
+                    text="Отмененные",
+                    callback_data=f"deals_archive:canceled:{period}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="В работе",
+                    callback_data=f"deals_archive:in_progress:{period}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="7д", callback_data=f"deals_archive:{status}:7d"
+                ),
+                InlineKeyboardButton(
+                    text="30д", callback_data=f"deals_archive:{status}:30d"
+                ),
+                InlineKeyboardButton(
+                    text="90д", callback_data=f"deals_archive:{status}:90d"
+                ),
+                InlineKeyboardButton(
+                    text="Все время", callback_data=f"deals_archive:{status}:all"
+                ),
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:back")],
+        ]
+    )
+
+
+async def _send_deals_archive(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    *,
+    status: str,
+    period: str,
+) -> None:
+    """Send archived deals list with filters."""
+    since = None
+    if period != "all":
+        days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
+        since = datetime.utcnow() - timedelta(days=days)
+
+    async with sessionmaker() as session:
+        query = select(Deal).where(
+            or_(
+                Deal.buyer_id == callback.from_user.id,
+                Deal.seller_id == callback.from_user.id,
+                Deal.guarantee_id == callback.from_user.id,
+            )
+        )
+        if status != "all":
+            query = query.where(Deal.status == status)
+        if since:
+            query = query.where(Deal.created_at >= since)
+        result = await session.execute(
+            query.order_by(Deal.id.desc()).limit(20)
+        )
+        deals = result.scalars().all()
+
+    header = f"🗄 Архив сделок — статус: {status}, период: {period}"
+    if not deals:
+        await callback.message.answer(header + "\n\nСделок не найдено.", reply_markup=_deals_archive_kb(status, period))
+        await callback.answer()
+        return
+
+    buttons = []
+    for deal in deals:
+        label = f"#{deal.id} {_status_label(deal.status)}"
+        buttons.append((deal.id, label))
+    await callback.message.answer(
+        header,
+        reply_markup=_deals_archive_kb(status, period),
+    )
+    await callback.message.answer(
+        "Выберите сделку из архива:", reply_markup=deal_list_kb(buttons)
+    )
+    await callback.answer()
+
+
 async def _recalc_rating(session, user_id: int) -> None:
     """Handle recalc rating.
 
@@ -212,7 +306,23 @@ async def _recalc_rating(session, user_id: int) -> None:
         await session.commit()
 
 
-@router.message(F.text == "👤 Профиль")
+def _is_profile_button_text(message: Message) -> bool:
+    """Check whether a message likely refers to the profile menu button."""
+    if not message.text:
+        return False
+    text = message.text.strip()
+    profile_label = "\U0001F464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c"
+    if text == profile_label:
+        return True
+    if "\u041f\u0440\u043e\u0444\u0438\u043b\u044c" in text or "Profile" in text:
+        return True
+    if text.startswith("\U0001F464"):
+        return True
+    normalized = re.sub(r"[^\w\u0400-\u04FF]+", "", text).lower()
+    return "\u043f\u0440\u043e\u0444\u0438\u043b\u044c" in normalized
+
+
+@router.message(_is_profile_button_text)
 async def profile_main(
     message: Message, sessionmaker: async_sessionmaker, settings: Settings
 ) -> None:
@@ -487,6 +597,25 @@ async def profile_deals(
     await callback.answer()
 
 
+@router.callback_query(F.data == "profile:deals_archive")
+async def profile_deals_archive(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Show deals archive with filters."""
+    await _send_deals_archive(
+        callback, sessionmaker, status="closed", period="30d"
+    )
+
+
+@router.callback_query(F.data.startswith("deals_archive:"))
+async def deals_archive_filter(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle archive filter updates."""
+    _, status, period = callback.data.split(":", 2)
+    await _send_deals_archive(callback, sessionmaker, status=status, period=period)
+
+
 @router.callback_query(F.data.startswith("profile_deal:"))
 async def profile_deal_detail(
     callback: CallbackQuery,
@@ -528,7 +657,11 @@ async def profile_deal_detail(
         return
 
     text = _deal_text(deal, ad, game, seller, buyer, guarantor)
-    await callback.message.answer(text, reply_markup=deal_detail_kb(deal.id))
+    deal_chat_url = deal.room_invite_link if deal.room_ready else None
+    await callback.message.answer(
+        text,
+        reply_markup=deal_detail_kb(deal.id, deal_chat_url=deal_chat_url),
+    )
     await callback.answer()
 
 
@@ -595,6 +728,9 @@ async def review_start(
         deal = result.scalar_one_or_none()
         if not deal:
             await callback.answer("Сделка не найдена.")
+            return
+        if deal.status != "closed":
+            await callback.answer("Отзыв доступен после завершения сделки.")
             return
 
     if callback.from_user.id not in {
@@ -697,6 +833,52 @@ async def review_comment(
         comment = ""
 
     async with sessionmaker() as session:
+        result = await session.execute(select(Deal).where(Deal.id == deal_id))
+        deal = result.scalar_one_or_none()
+        if not deal:
+            await state.clear()
+            await message.answer("Сделка не найдена.")
+            return
+        if deal.status != "closed":
+            await state.clear()
+            await message.answer("Отзыв доступен после завершения сделки.")
+            return
+        if message.from_user.id not in {
+            deal.buyer_id,
+            deal.seller_id,
+            deal.guarantee_id,
+        }:
+            await state.clear()
+            await message.answer("Нет доступа.")
+            return
+        valid_targets = {
+            deal.buyer_id,
+            deal.seller_id,
+            deal.guarantee_id,
+        }
+        if target_id not in valid_targets or target_id == message.from_user.id:
+            await state.clear()
+            await message.answer("Неверный получатель отзыва.")
+            return
+
+        result = await session.execute(
+            select(Review).where(
+                Review.deal_id == deal_id,
+                Review.author_id == message.from_user.id,
+                Review.target_id == target_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.rating = rating
+            existing.comment = comment
+            existing.status = "active"
+            await session.commit()
+            await _recalc_rating(session, target_id)
+            await state.clear()
+            await message.answer("Отзыв обновлен.")
+            return
+
         review = Review(
             deal_id=deal_id,
             author_id=message.from_user.id,

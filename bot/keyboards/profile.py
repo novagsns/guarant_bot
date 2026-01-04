@@ -18,6 +18,9 @@ def profile_actions_kb() -> InlineKeyboardMarkup:
                     text="🧾 Мои сделки", callback_data="profile:deals"
                 ),
                 InlineKeyboardButton(
+                    text="🗄 Архив сделок", callback_data="profile:deals_archive"
+                ),
+                InlineKeyboardButton(
                     text="🗂 Мои объявления", callback_data="profile:ads"
                 ),
             ],
@@ -73,25 +76,40 @@ def deal_list_kb(deals: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def deal_detail_kb(deal_id: int) -> InlineKeyboardMarkup:
+def deal_detail_kb(
+    deal_id: int,
+    *,
+    deal_chat_url: str | None = None,
+) -> InlineKeyboardMarkup:
     """Handle deal detail kb.
 
     Args:
         deal_id: Value for deal_id.
+        deal_chat_url: Optional invite link for the deal room.
 
     Returns:
         Return value.
     """
+    chat_button = (
+        InlineKeyboardButton(text="Open deal chat", url=deal_chat_url)
+        if deal_chat_url
+        else InlineKeyboardButton(
+            text="Open deal chat",
+            callback_data=f"chat:{deal_id}",
+        )
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [chat_button],
             [
                 InlineKeyboardButton(
-                    text="📄 Экспорт .txt", callback_data=f"export_deal:{deal_id}"
+                    text="Export deal .txt",
+                    callback_data=f"export_deal:{deal_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⭐ Оставить отзыв",
+                    text="Leave review",
                     callback_data=f"review_start:{deal_id}",
                 )
             ],

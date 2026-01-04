@@ -9,6 +9,8 @@ data/
 *.sqlite
 *.sqlite3
 *.log
+logs/
+server_connection.txt
 
 # keys/certs
 *.pem

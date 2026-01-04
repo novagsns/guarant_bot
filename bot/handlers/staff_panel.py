@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -25,6 +27,7 @@ from bot.db.models import (
     Complaint,
     Deal,
     Dispute,
+    Game,
     BroadcastRequest,
     ModerationChat,
     ModerationWord,
@@ -36,6 +39,7 @@ from bot.db.models import (
     WalletTransaction,
 )
 from bot.handlers.helpers import get_or_create_user
+from bot.handlers.deals import _assign_deal_room, _notify_room_pool_low
 from bot.keyboards.ads import deal_after_take_kb
 from bot.keyboards.staff import (
     admin_panel_kb,
@@ -76,6 +80,17 @@ from bot.utils.roles import is_owner, is_staff, role_label
 router = Router()
 
 
+async def _send_broadcast_message(bot, user_id: int, text: str) -> bool:
+    """Handle send broadcast message."""
+    try:
+        await bot.send_message(user_id, text)
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest):
+        return False
+    except Exception:
+        return False
+
+
 class OwnerStates(StatesGroup):
     """Represent OwnerStates.
 
@@ -92,6 +107,18 @@ class OwnerStates(StatesGroup):
     task_desc = State()
     review_edit = State()
     admin_deal = State()
+
+
+class AdRejectStates(StatesGroup):
+    """Represent AdRejectStates.
+
+    Attributes:
+        ad_id: Attribute value.
+        reason: Attribute value.
+    """
+
+    ad_id = State()
+    reason = State()
 
 
 class DisputeStates(StatesGroup):
@@ -1034,6 +1061,72 @@ async def owner_set_role_value(
     )
 
 
+
+@router.message(F.text.startswith("/fire"))
+async def fire_staff(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Remove staff role from a user."""
+    async with sessionmaker() as session:
+        owner = await get_or_create_user(session, message.from_user)
+        if not is_owner(owner.role, settings.owner_ids, owner.id):
+            return
+
+        target_user = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+        elif message.forward_from:
+            target_user = message.forward_from
+
+        parts = message.text.split() if message.text else []
+        user_id = None
+
+        if target_user:
+            user_id = target_user.id
+        else:
+            if len(parts) < 2:
+                await message.answer("Usage: /fire user_id or reply")
+                return
+            target = parts[1].strip()
+            if target.startswith("@"): 
+                username = target[1:]
+                result = await session.execute(
+                    select(User).where(User.username == username)
+                )
+                user = result.scalar_one_or_none()
+                if not user:
+                    await message.answer("User not found. Ask them to /start.")
+                    return
+                user_id = user.id
+            else:
+                if not target.isdigit():
+                    await message.answer("Usage: /fire user_id or reply")
+                    return
+                user_id = int(target)
+
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            await message.answer("User not found. Ask them to /start.")
+            return
+        if is_owner(user.role, settings.owner_ids, user.id):
+            await message.answer("Cannot remove owner.")
+            return
+
+        user.role = "user"
+        user.on_shift = False
+        await session.commit()
+
+    await message.answer(f"Staff removed: {user_id}")
+    await _log_admin(
+        message.bot,
+        settings,
+        f"Staff removed: {user_id} (by {owner.id})",
+    )
+
+
 @router.callback_query(F.data == "owner:list_staff")
 async def owner_list_staff(
     callback: CallbackQuery,
@@ -1190,6 +1283,7 @@ async def mod_approve(
             await callback.answer("Объявление не найдено.")
             return
         ad.moderation_status = "approved"
+        ad.moderation_reason = None
         await session.commit()
         result = await session.execute(select(User).where(User.id == ad.seller_id))
         seller = result.scalar_one_or_none()
@@ -1222,40 +1316,82 @@ async def mod_approve(
 @router.callback_query(F.data.startswith("mod_reject:"))
 async def mod_reject(
     callback: CallbackQuery,
+    state: FSMContext,
     sessionmaker: async_sessionmaker,
     settings: Settings,
 ) -> None:
-    """Handle mod reject.
+    """Handle mod reject."""
 
-    Args:
-        callback: Value for callback.
-        sessionmaker: Value for sessionmaker.
-        settings: Value for settings.
-    """
     user = await _load_user(sessionmaker, callback.from_user)
     if not _is_moderator(user.role):
         await callback.answer("Нет доступа.")
         return
     ad_id = int(callback.data.split(":")[1])
+    await state.set_state(AdRejectStates.reason)
+    await state.update_data(ad_id=ad_id)
+    await callback.message.answer("Укажите причину отклонения объявления.")
+    await callback.answer()
+
+
+@router.message(AdRejectStates.reason)
+async def mod_reject_reason(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Handle mod reject reason."""
+
+    user = await _load_user(sessionmaker, message.from_user)
+    if not _is_moderator(user.role):
+        await state.clear()
+        return
+    if message.text and message.text.strip().lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer("Действие отменено.")
+        return
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("Укажите причину отклонения.")
+        return
+    data = await state.get_data()
+    ad_id = data.get("ad_id")
+    if not ad_id:
+        await state.clear()
+        await message.answer("Не найдено объявление для отклонения.")
+        return
+    seller_id = None
     async with sessionmaker() as session:
         result = await session.execute(select(Ad).where(Ad.id == ad_id))
         ad = result.scalar_one_or_none()
         if not ad:
-            await callback.answer("Объявление не найдено.")
+            await state.clear()
+            await message.answer("Объявление не найдено.")
             return
         ad.moderation_status = "rejected"
+        ad.moderation_reason = reason
         ad.active = False
+        seller_id = ad.seller_id
         await session.commit()
-    await callback.message.answer("Объявление отклонено.")
+    if seller_id:
+        try:
+            await message.bot.send_message(
+                seller_id,
+                f"Ваше объявление #{ad_id} отклонено. Причина: {reason}",
+            )
+        except Exception:
+            pass
+    await message.answer("Объявление отклонено.")
     await _log_admin(
-        callback.bot,
+        message.bot,
         settings,
-        f"Модерация: отклонено объявление #{ad_id} (модератор {callback.from_user.id})",
+        f"Модерация: отклонено объявление #{ad_id} (модератор {message.from_user.id}) Причина: {reason}",
     )
-    await callback.answer()
+    await state.clear()
 
 
 @router.callback_query(F.data == "moderator:complaints")
+
 async def moderator_complaints(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
@@ -2530,38 +2666,45 @@ async def broadcast_approve(
         result = await session.execute(select(User.id))
         user_ids = [row[0] for row in result.all()]
 
-    sent = 0
-    for user_id in user_ids:
-        try:
-            await callback.bot.send_message(user_id, req_text)
-            sent += 1
-        except Exception:
-            continue
+    await callback.answer("Рассылка запущена.")
 
-    await callback.message.answer(f"Рассылка одобрена. Отправлено: {sent}.")
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationChat).where(ModerationChat.active.is_(True))
+    async def _run_broadcast() -> None:
+        sent = 0
+        failed = 0
+        for user_id in user_ids:
+            ok = await _send_broadcast_message(callback.bot, user_id, req_text)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+
+        await callback.message.answer(
+            f"Рассылка одобрена. Отправлено: {sent}. "
+            f"Ошибки: {failed}."
         )
-        mod_chats = result.scalars().all()
+        async with sessionmaker() as session:
+            result = await session.execute(
+                select(ModerationChat).where(ModerationChat.active.is_(True))
+            )
+            mod_chats = result.scalars().all()
 
-    if mod_chats:
-        pretty = (
-            "📣 <b>Рассылка отправлена</b>\n"
-            f"ID: {request_id}\n"
-            f"Тип: {req_kind}\n"
-            f"Автор: {req_creator}\n"
-            f"Охват: {sent}\n\n"
-            f"{req_text}"
-        )
-        for chat in mod_chats:
-            try:
-                await callback.bot.send_message(chat.chat_id, pretty)
-            except Exception:
-                continue
-    await callback.answer()
+        if mod_chats:
+            pretty = (
+                "\U0001F4E3 <b>\u0420\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430</b>\n"
+                f"ID: {request_id}\n"
+                f"\u0422\u0438\u043f: {req_kind}\n"
+                f"\u0410\u0432\u0442\u043e\u0440: {req_creator}\n"
+                f"\u041e\u0445\u0432\u0430\u0442: {sent}\n"
+                f"\u041e\u0448\u0438\u0431\u043a\u0438: {failed}\n\n"
+                f"{req_text}"
+            )
+            for chat in mod_chats:
+                try:
+                    await callback.bot.send_message(chat.chat_id, pretty)
+                except Exception:
+                    continue
 
-
+    asyncio.create_task(_run_broadcast())
 @router.callback_query(F.data.startswith("broadcast_reject:"))
 async def broadcast_reject(
     callback: CallbackQuery,
@@ -2816,23 +2959,59 @@ async def create_deal_manual(
         )
         session.add(deal)
         await session.commit()
+        room, room_error = await _assign_deal_room(session, deal)
+        await session.commit()
 
     await message.answer(f"Ручная сделка создана #{deal.id}.")
     await message.bot.send_message(
         buyer_id,
         f"Создана ручная сделка #{deal.id}.",
-        reply_markup=deal_after_take_kb(deal.id, role="buyer"),
+        reply_markup=deal_after_take_kb(
+            deal.id,
+            role="buyer",
+            guarantor_id=guarantor.id,
+        ),
     )
     await message.bot.send_message(
         seller_id,
         f"Создана ручная сделка #{deal.id}.",
-        reply_markup=deal_after_take_kb(deal.id, role="seller"),
+        reply_markup=deal_after_take_kb(
+            deal.id,
+            role="seller",
+            guarantor_id=guarantor.id,
+        ),
     )
     await message.bot.send_message(
         guarantor.id,
         f"✅ Вы назначены гарантом сделки #{deal.id}.",
-        reply_markup=deal_after_take_kb(deal.id, role="guarantor"),
+        reply_markup=deal_after_take_kb(
+            deal.id,
+            role="guarantor",
+            guarantor_id=guarantor.id,
+        ),
     )
+    if room_error:
+        await message.bot.send_message(
+            guarantor.id,
+            f"Deal #{deal.id} has no room yet. {room_error}",
+        )
+        chat_id, topic_id = get_admin_target(settings)
+        if chat_id:
+            await message.bot.send_message(
+                chat_id,
+                f"Deal #{deal.id} created, but no free rooms available.",
+                message_thread_id=topic_id,
+            )
+    elif room and room.invite_link:
+        await message.bot.send_message(
+            guarantor.id,
+            (
+                f"Deal #{deal.id} room assigned. "
+                "Press “Open chat” to release the link to participants."
+            ),
+        )
+
+    await _notify_room_pool_low(message.bot, settings, sessionmaker)
     await _log_admin(
         message.bot,
         settings,

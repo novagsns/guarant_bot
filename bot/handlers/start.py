@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.config import Settings
 from bot.db.models import (
+    Ad,
     ModerationChat,
     ModerationRestriction,
     Review,
@@ -18,12 +21,34 @@ from bot.db.models import (
     WalletTransaction,
 )
 from bot.handlers.helpers import get_or_create_user
-from bot.keyboards.common import deals_menu_kb, main_menu_kb, referral_kb
-from bot.services.trust import apply_trust_event
+from bot.keyboards.common import (
+    deals_menu_kb,
+    main_menu_kb,
+    referral_kb,
+    tools_fee_type_kb,
+    tools_menu_kb,
+)
+from bot.services.fees import calculate_fee
+from bot.services.trust import apply_trust_event, get_trust_score
 from bot.services.weekly_rewards import grant_pending_rewards
+from bot.utils.scammers import find_scammer
 from bot.utils.texts import TOOLS_TEXT, WELCOME_TEXT
 
 router = Router()
+
+
+class ToolsStates(StatesGroup):
+    """Represent ToolsStates.
+
+    Attributes:
+        account_id: Attribute value.
+        fee_amount: Attribute value.
+        fee_addon: Attribute value.
+    """
+
+    account_id = State()
+    fee_amount = State()
+    fee_addon = State()
 
 
 def _format_until(value) -> str:
@@ -142,7 +167,7 @@ async def _sync_user_restrictions(
 
 async def _send_restrictions_summary(
     message: Message, sessionmaker: async_sessionmaker
-) -> None:
+) -> bool:
     """Handle send restrictions summary.
 
     Args:
@@ -165,7 +190,7 @@ async def _send_restrictions_summary(
         rows = result.all()
 
     if not rows:
-        return
+        return False
 
     lines = [
         "\u26a0\ufe0f \u041e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f \u0432 \u043c\u043e\u0434\u0435\u0440\u0438\u0440\u0443\u0435\u043c\u044b\u0445 \u0447\u0430\u0442\u0430\u0445:"
@@ -188,6 +213,7 @@ async def _send_restrictions_summary(
             f"{action_label} | {chat_title}{until_label}\n\u041f\u0440\u0438\u0447\u0438\u043d\u0430: {reason}"
         )
     await message.answer("\n\n".join(lines))
+    return True
 
 
 @router.message(CommandStart())
@@ -227,7 +253,16 @@ async def cmd_start(
                 referrer_id=referrer_id,
             )
             session.add(user)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Another concurrent /start created the row.
+                await session.rollback()
+                created = False
+                result = await session.execute(
+                    select(User).where(User.id == message.from_user.id)
+                )
+                user = result.scalar_one_or_none()
         else:
             await get_or_create_user(session, message.from_user)
 
@@ -316,7 +351,222 @@ async def menu_tools(message: Message) -> None:
     Args:
         message: Value for message.
     """
-    await message.answer(TOOLS_TEXT)
+    await message.answer(TOOLS_TEXT, reply_markup=tools_menu_kb())
+
+
+@router.callback_query(F.data == "tools:back")
+async def tools_back(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle tools back.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+    """
+    await state.clear()
+    await callback.message.answer(
+        "\u0413\u043b\u0430\u0432\u043d\u043e\u0435 \u043c\u0435\u043d\u044e.",
+        reply_markup=main_menu_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "tools:restrictions")
+async def tools_restrictions(
+    callback: CallbackQuery, state: FSMContext, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle tools restrictions.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+        sessionmaker: Value for sessionmaker.
+    """
+    await state.clear()
+    shown = await _send_restrictions_summary(callback.message, sessionmaker)
+    if not shown:
+        await callback.message.answer(
+            "\u041e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u0439 \u043d\u0435\u0442."
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "tools:account_check")
+async def tools_account_check_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle tools account check start.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+    """
+    await state.clear()
+    await state.set_state(ToolsStates.account_id)
+    await callback.message.answer(
+        "\U0001f194 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438."
+    )
+    await callback.answer()
+
+
+@router.message(ToolsStates.account_id)
+async def tools_account_check(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle tools account check.
+
+    Args:
+        message: Value for message.
+        state: Value for state.
+        sessionmaker: Value for sessionmaker.
+    """
+    account_id = (message.text or "").strip()
+    if not account_id:
+        await message.answer(
+            "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430."
+        )
+        return
+    async with sessionmaker() as session:
+        scammer = await find_scammer(session, account_id=account_id)
+        if scammer:
+            name = f"@{scammer.username}" if scammer.username else "-"
+            text = (
+                f"\u041d\u0430\u0439\u0434\u0435\u043d\u043e \u0441\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0435 #{scammer.id}\n"
+                f"ID: {scammer.user_id or '-'}\n"
+                f"\u042e\u0437\u0435\u0440\u043d\u0435\u0439\u043c: {name}\n"
+                f"ID \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430: {scammer.account_id or '-'}\n"
+                f"\u0414\u0430\u043d\u043d\u044b\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430: {scammer.account_details or '-'}\n"
+                f"\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b: {scammer.payment_details or '-'}\n"
+                f"\u041f\u0440\u0438\u043c\u0435\u0447\u0430\u043d\u0438\u0435: {scammer.notes or '-'}"
+            )
+            await state.clear()
+            await message.answer(text)
+            return
+        result = await session.execute(
+            select(Ad.id).where(
+                Ad.account_id == account_id,
+                Ad.active.is_(True),
+                Ad.moderation_status != "rejected",
+            )
+        )
+        exists = result.scalar_one_or_none()
+    await state.clear()
+    if exists:
+        await message.answer(
+            "\u26a0\ufe0f \u042d\u0442\u043e\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c \u0432 \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u044f\u0445."
+        )
+    else:
+        await message.answer(
+            "\u2705 \u0410\u043a\u043a\u0430\u0443\u043d\u0442 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0432 \u0431\u0430\u0437\u0435 \u0441\u043a\u0430\u043c\u0435\u0440\u043e\u0432."
+        )
+
+
+@router.callback_query(F.data == "tools:fee")
+async def tools_fee_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle tools fee start.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+    """
+    await state.clear()
+    await callback.message.answer(
+        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u0438\u043f \u0441\u0434\u0435\u043b\u043a\u0438:",
+        reply_markup=tools_fee_type_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tools:fee_type:"))
+async def tools_fee_type(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle tools fee type.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+    """
+    parts = callback.data.split(":") if callback.data else []
+    fee_type = parts[2] if len(parts) >= 3 else "sale"
+    await state.clear()
+    if fee_type == "exchange":
+        fee = calculate_fee("0", "exchange")
+        await callback.message.answer(
+            f"\u041a\u043e\u043c\u0438\u0441\u0441\u0438\u044f \u0437\u0430 \u043e\u0431\u043c\u0435\u043d: {fee} \u20bd"
+        )
+        await callback.answer()
+        return
+    await state.update_data(fee_type=fee_type)
+    if fee_type == "exchange_with_addon":
+        await state.set_state(ToolsStates.fee_addon)
+        await callback.message.answer(
+            "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043e\u043f\u043b\u0430\u0442\u044b."
+        )
+    else:
+        await state.set_state(ToolsStates.fee_amount)
+        await callback.message.answer(
+            "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0441\u0434\u0435\u043b\u043a\u0438."
+        )
+    await callback.answer()
+
+
+@router.message(ToolsStates.fee_amount)
+async def tools_fee_amount(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle tools fee amount.
+
+    Args:
+        message: Value for message.
+        state: Value for state.
+        sessionmaker: Value for sessionmaker.
+    """
+    raw_amount = (message.text or "").strip().replace(",", ".")
+    if not raw_amount or raw_amount.count(".") > 1:
+        await message.answer(
+            "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443."
+        )
+        return
+    data = await state.get_data()
+    fee_type = data.get("fee_type", "sale")
+    async with sessionmaker() as session:
+        trust_score = await get_trust_score(session, message.from_user.id)
+    fee = calculate_fee(raw_amount, fee_type, trust_score=trust_score)
+    await state.clear()
+    if fee is None:
+        await message.answer(
+            "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u0430\u0442\u044c \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u044e."
+        )
+        return
+    await message.answer(
+        f"\u041a\u043e\u043c\u0438\u0441\u0441\u0438\u044f: {fee} \u20bd"
+    )
+
+
+@router.message(ToolsStates.fee_addon)
+async def tools_fee_addon(message: Message, state: FSMContext) -> None:
+    """Handle tools fee addon.
+
+    Args:
+        message: Value for message.
+        state: Value for state.
+    """
+    raw_amount = (message.text or "").strip().replace(",", ".")
+    if not raw_amount or raw_amount.count(".") > 1:
+        await message.answer(
+            "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043e\u043f\u043b\u0430\u0442\u044b."
+        )
+        return
+    fee = calculate_fee("0", "exchange_with_addon", addon_amount=raw_amount)
+    await state.clear()
+    if fee is None:
+        await message.answer(
+            "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u0430\u0442\u044c \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u044e."
+        )
+        return
+    await message.answer(
+        f"\u041a\u043e\u043c\u0438\u0441\u0441\u0438\u044f: {fee} \u20bd"
+    )
 
 
 @router.message(F.text == "/cancel")

@@ -1,20 +1,24 @@
-"""Module for ads functionality."""
+﻿"""Module for ads functionality."""
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
+from html import escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -33,6 +37,45 @@ from bot.utils.scammers import find_scammer
 from bot.utils.vip import is_vip_until
 
 router = Router()
+
+_CUSTOM_EMOJI_RE = re.compile(r"<tg-emoji[^>]*>")
+
+
+def _count_custom_emoji_html(html: str | None) -> int:
+    """Count custom emoji markers in HTML."""
+    if not html:
+        return 0
+    return len(_CUSTOM_EMOJI_RE.findall(html))
+
+
+def _count_custom_emoji_entities(message: Message | None) -> int:
+    """Count custom emoji entities in a Telegram message."""
+    if not message:
+        return 0
+    entities = (message.entities or []) + (message.caption_entities or [])
+    return sum(1 for entity in entities if entity.type == "custom_emoji")
+
+
+async def _notify_custom_emoji_loss(
+    bot,
+    sessionmaker: async_sessionmaker,
+    *,
+    context: str,
+    expected: int,
+    actual: int,
+    chat_id: int | None = None,
+    ad_id: int | None = None,
+) -> None:
+    """Notify moderators when custom emojis are lost on send."""
+    text = (
+        "⚠️ Telegram удалил часть кастомных эмоджи.\n"
+        f"Контекст: {context}\n"
+        f"Ожидалось: {expected}\n"
+        f"Фактически: {actual}\n"
+        f"Чат: {chat_id or '-'}\n"
+        f"Объявление: {ad_id or '-'}"
+    )
+    await _notify_moderators(bot, sessionmaker, text)
 
 
 class AdCreateStates(StatesGroup):
@@ -101,6 +144,7 @@ async def _notify_moderators(
     text: str,
     media_type: str | None = None,
     media_file_id: str | None = None,
+    parse_mode: str | None = None,
 ) -> None:
     """Handle notify moderators.
 
@@ -119,13 +163,36 @@ async def _notify_moderators(
     if not moderators:
         return
 
+    expected_emojis = (
+        _count_custom_emoji_html(text) if parse_mode == "HTML" else 0
+    )
+    reported = False
+
     for mod in moderators:
+        response = None
         if media_type == "фото" and media_file_id:
-            await bot.send_photo(mod.id, media_file_id, caption=text)
+            response = await bot.send_photo(
+                mod.id, media_file_id, caption=text, parse_mode=parse_mode
+            )
         elif media_type == "видео" and media_file_id:
-            await bot.send_video(mod.id, media_file_id, caption=text)
+            response = await bot.send_video(
+                mod.id, media_file_id, caption=text, parse_mode=parse_mode
+            )
         else:
-            await bot.send_message(mod.id, text)
+            response = await bot.send_message(mod.id, text, parse_mode=parse_mode)
+
+        if expected_emojis and not reported:
+            actual_emojis = _count_custom_emoji_entities(response)
+            if actual_emojis < expected_emojis:
+                reported = True
+                await _notify_custom_emoji_loss(
+                    bot,
+                    sessionmaker,
+                    context="moderation_notify",
+                    expected=expected_emojis,
+                    actual=actual_emojis,
+                    chat_id=mod.id,
+                )
 
 
 def _is_cancel(text: str | None) -> bool:
@@ -204,11 +271,64 @@ def _yes_no_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def _ads_page_callback(
+    ad_kind: str,
+    page: int,
+    game_id: int | None,
+    price_min: Decimal | None,
+    price_max: Decimal | None,
+) -> str:
+    """Build callback payload for ads pagination."""
+    encoded_min = str(price_min) if price_min is not None else "n"
+    encoded_max = str(price_max) if price_max is not None else "n"
+    encoded_game = str(game_id or 0)
+    return f"ads_page:{ad_kind}:{page}:{encoded_game}:{encoded_min}:{encoded_max}"
+
+
+def _ads_page_kb(
+    ad_kind: str,
+    *,
+    page: int,
+    total_pages: int,
+    game_id: int | None = None,
+    price_min: Decimal | None = None,
+    price_max: Decimal | None = None,
+) -> InlineKeyboardMarkup | None:
+    """Build pagination keyboard for ads list."""
+    if total_pages <= 1:
+        return None
+    nav: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_ads_page_callback(
+                    ad_kind, page - 1, game_id, price_min, price_max
+                ),
+            )
+        )
+    nav.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_ads_page_callback(
+                    ad_kind, page + 1, game_id, price_min, price_max
+                ),
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[nav])
+
+
 async def _send_ads(
     message: Message,
     sessionmaker: async_sessionmaker,
     *,
     ad_kind: str,
+    game_id: int | None = None,
+    price_min: Decimal | None = None,
+    price_max: Decimal | None = None,
+    page: int = 1,
 ) -> None:
     """Handle send ads.
 
@@ -217,17 +337,43 @@ async def _send_ads(
         sessionmaker: Value for sessionmaker.
         ad_kind: Value for ad_kind.
     """
+    page = max(page, 1)
+    per_page = 5
+    filters = [
+        Ad.active.is_(True),
+        Ad.moderation_status == "approved",
+        Ad.ad_kind == ad_kind,
+    ]
+    if ad_kind == "sale":
+        if game_id and game_id > 0:
+            filters.append(Ad.game_id == game_id)
+        if price_min is not None:
+            filters.append(Ad.price >= price_min)
+        if price_max is not None:
+            filters.append(Ad.price <= price_max)
+
     async with sessionmaker() as session:
-        result = await session.execute(
+        total = await session.scalar(
+            select(func.count()).select_from(Ad).where(*filters)
+        )
+        total = total or 0
+        total_pages = max((total + per_page - 1) // per_page, 1)
+        page = min(page, total_pages)
+        query = (
             select(Ad, Game)
             .join(Game, Game.id == Ad.game_id)
-            .where(
-                Ad.active.is_(True),
-                Ad.moderation_status == "approved",
-                Ad.ad_kind == ad_kind,
+            .where(*filters)
+        )
+        if ad_kind == "sale":
+            query = query.order_by(
+                Ad.promoted_at.is_(None),
+                desc(Ad.promoted_at),
+                Ad.created_at.desc(),
             )
-            .order_by(Ad.created_at.desc())
-            .limit(20)
+        else:
+            query = query.order_by(Ad.created_at.desc())
+        result = await session.execute(
+            query.limit(per_page).offset((page - 1) * per_page)
         )
         rows = result.all()
 
@@ -248,23 +394,62 @@ async def _send_ads(
             price_line = f"💰 Цена: {ad.price} ₽\n"
             actions_kb = ad_actions_kb(ad.id)
 
+        title_html = ad.title_html or escape(ad.title)
+        description_html = ad.description_html or escape(ad.description)
+        game_name = escape(game.name)
         caption = (
-            f"<b>{ad.title}</b>\n"
-            f"🎮 Игра: {game.name}\n"
+            f"<b>{title_html}</b>\n"
+            f"🎮 Игра: {game_name}\n"
             f"{price_line}"
-            f"{ad.description}"
+            f"{description_html}"
         )
+        expected_emojis = _count_custom_emoji_html(caption)
 
         if ad.media_type == "фото" and ad.media_file_id:
-            await message.answer_photo(
-                ad.media_file_id, caption=caption, reply_markup=actions_kb
+            response = await message.answer_photo(
+                ad.media_file_id,
+                caption=caption,
+                reply_markup=actions_kb,
+                parse_mode="HTML",
             )
         elif ad.media_type == "видео" and ad.media_file_id:
-            await message.answer_video(
-                ad.media_file_id, caption=caption, reply_markup=actions_kb
+            response = await message.answer_video(
+                ad.media_file_id,
+                caption=caption,
+                reply_markup=actions_kb,
+                parse_mode="HTML",
             )
         else:
-            await message.answer(caption, reply_markup=actions_kb)
+            response = await message.answer(
+                caption, reply_markup=actions_kb, parse_mode="HTML"
+            )
+
+        if expected_emojis:
+            actual_emojis = _count_custom_emoji_entities(response)
+            if actual_emojis < expected_emojis:
+                await _notify_custom_emoji_loss(
+                    message.bot,
+                    sessionmaker,
+                    context="ads_publish",
+                    expected=expected_emojis,
+                    actual=actual_emojis,
+                    chat_id=message.chat.id,
+                    ad_id=ad.id,
+                )
+
+    pagination_kb = _ads_page_kb(
+        ad_kind,
+        page=page,
+        total_pages=total_pages,
+        game_id=game_id,
+        price_min=price_min,
+        price_max=price_max,
+    )
+    if pagination_kb:
+        await message.answer(
+            f"Страница {page} из {total_pages}",
+            reply_markup=pagination_kb,
+        )
 
 
 async def _send_exchanges(message: Message, sessionmaker: async_sessionmaker) -> None:
@@ -274,7 +459,7 @@ async def _send_exchanges(message: Message, sessionmaker: async_sessionmaker) ->
         message: Value for message.
         sessionmaker: Value for sessionmaker.
     """
-    await _send_ads(message, sessionmaker, ad_kind="exchange")
+    await _send_ads(message, sessionmaker, ad_kind="exchange", page=1)
 
 
 @router.message(F.text == "🛒 Продать аккаунт")
@@ -312,7 +497,160 @@ async def all_ads(message: Message, sessionmaker: async_sessionmaker) -> None:
         message: Value for message.
         sessionmaker: Value for sessionmaker.
     """
-    await _send_ads(message, sessionmaker, ad_kind="sale")
+    await _show_games_page(message, sessionmaker, page=1)
+
+
+async def _show_games_page(
+    message: Message, sessionmaker: async_sessionmaker, *, page: int
+) -> None:
+    """Show paginated games list for sale filters."""
+    page = max(page, 1)
+    per_page = 5
+    async with sessionmaker() as session:
+        total = await session.scalar(
+            select(func.count()).select_from(Game).where(Game.active.is_(True))
+        )
+        total = total or 0
+        total_pages = max((total + per_page - 1) // per_page, 1)
+        page = min(page, total_pages)
+        result = await session.execute(
+            select(Game.id, Game.name)
+            .where(Game.active.is_(True))
+            .order_by(Game.name)
+            .limit(per_page)
+            .offset((page - 1) * per_page)
+        )
+        games = result.all()
+    await message.answer(
+        "🎮 Выберите игру для фильтра:",
+        reply_markup=game_list_kb(
+            games, prefix="filter_game", page=page, total_pages=total_pages, include_all=True
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("game_page:"))
+async def game_page(callback: CallbackQuery, sessionmaker: async_sessionmaker) -> None:
+    """Handle game pagination."""
+    try:
+        page = int(callback.data.split(":")[1])
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    await _show_games_page(callback.message, sessionmaker, page=page)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "noop")
+async def noop_callback(callback: CallbackQuery) -> None:
+    """Ignore noop callbacks."""
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("filter_game:"))
+async def filter_game(callback: CallbackQuery) -> None:
+    """Handle game filter selection."""
+    raw = callback.data.split(":", 1)[1]
+    try:
+        game_id = int(raw)
+    except ValueError:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    await callback.message.answer(
+        "💰 Выберите диапазон цен:",
+        reply_markup=account_filter_kb(game_id if game_id > 0 else None),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_filter:"))
+async def account_filter(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle account filter by price."""
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        game_id = int(parts[1])
+    except ValueError:
+        game_id = 0
+    range_value = parts[2]
+    price_min = None
+    price_max = None
+    if range_value == "all":
+        pass
+    elif range_value.endswith("+"):
+        try:
+            price_min = Decimal(range_value[:-1])
+        except InvalidOperation:
+            await callback.answer("Некорректные данные.", show_alert=True)
+            return
+    elif "-" in range_value:
+        min_raw, max_raw = range_value.split("-", 1)
+        try:
+            price_min = Decimal(min_raw)
+            price_max = Decimal(max_raw)
+        except InvalidOperation:
+            await callback.answer("Некорректные данные.", show_alert=True)
+            return
+    else:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+
+    await _send_ads(
+        callback.message,
+        sessionmaker,
+        ad_kind="sale",
+        game_id=game_id or None,
+        price_min=price_min,
+        price_max=price_max,
+        page=1,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ads_page:"))
+async def ads_page(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle ads pagination."""
+    parts = callback.data.split(":")
+    if len(parts) != 6:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    ad_kind = parts[1]
+    if ad_kind not in {"sale", "exchange"}:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        page = int(parts[2])
+    except ValueError:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        game_id = int(parts[3])
+    except ValueError:
+        game_id = 0
+    raw_min = parts[4]
+    raw_max = parts[5]
+    try:
+        price_min = None if raw_min == "n" else Decimal(raw_min)
+        price_max = None if raw_max == "n" else Decimal(raw_max)
+    except InvalidOperation:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    await _send_ads(
+        callback.message,
+        sessionmaker,
+        ad_kind=ad_kind,
+        game_id=game_id or None,
+        price_min=price_min if ad_kind == "sale" else None,
+        price_max=price_max if ad_kind == "sale" else None,
+        page=page,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("game:"))
@@ -369,7 +707,7 @@ async def create_ad_title(message: Message, state: FSMContext) -> None:
     if not title:
         await message.answer("Введите название объявления.")
         return
-    await state.update_data(title=title)
+    await state.update_data(title=title, title_html=message.html_text or title)
     await state.set_state(AdCreateStates.description)
     await message.answer("📝 Введите описание:")
 
@@ -390,7 +728,9 @@ async def create_ad_description(message: Message, state: FSMContext) -> None:
     if not description:
         await message.answer("Введите описание.")
         return
-    await state.update_data(description=description)
+    await state.update_data(
+        description=description, description_html=message.html_text or description
+    )
     await state.set_state(AdCreateStates.is_account)
     await message.answer(
         "Это аккаунт? (нужен ID для проверки)",
@@ -584,7 +924,9 @@ async def create_ad_payment(
             game_id=data.get("game_id"),
             ad_kind="sale",
             title=data.get("title"),
+            title_html=data.get("title_html"),
             description=data.get("description"),
+            description_html=data.get("description_html"),
             account_id=data.get("account_id"),
             media_type=data.get("media_type"),
             media_file_id=data.get("media_file_id"),
@@ -600,16 +942,28 @@ async def create_ad_payment(
         game_name = game.name if game else "-"
 
     await state.clear()
+    account_line = ""
+    if ad.account_id:
+        account_line = f"🆔 ID аккаунта: {escape(ad.account_id)}\n"
+    title_html = data.get("title_html") or escape(ad.title)
+    description_html = data.get("description_html") or escape(ad.description)
     notify_text = (
-        "🛡️ Новое объявление на модерацию\n"
-        f"🧾 {ad.title}\n"
-        f"🎮 Игра: {game_name}\n"
+        "🛡 Новое объявление на модерацию\n"
+        f"🧾 {title_html}\n"
+        f"🎮 Игра: {escape(game_name)}\n"
         f"💰 Цена: {ad.price} ₽\n"
         f"👤 Продавец: {seller.id}\n"
-        f"🆔 ID объявления: {ad.id}"
+        f"{account_line}"
+        f"🆔 ID объявления: {ad.id}\n\n"
+        f"{description_html}"
     )
     await _notify_moderators(
-        message.bot, sessionmaker, notify_text, ad.media_type, ad.media_file_id
+        message.bot,
+        sessionmaker,
+        notify_text,
+        ad.media_type,
+        ad.media_file_id,
+        parse_mode="HTML",
     )
     await message.answer(
         "✅ Объявление отправлено на модерацию.",
@@ -649,14 +1003,19 @@ async def my_ads(message: Message, sessionmaker: async_sessionmaker) -> None:
             status_label = "отклонено"
         else:
             status_label = "активно" if ad.active else "не активно"
+        title_html = ad.title_html or escape(ad.title)
+        description_html = ad.description_html or escape(ad.description)
+        game_name = escape(game.name)
         caption = (
-            f"<b>{ad.title}</b>\n"
-            f"🎮 Игра: {game.name}\n"
+            f"<b>{title_html}</b>\n"
+            f"🎮 Игра: {game_name}\n"
             f"💰 Цена: {ad.price} ₽\n"
             f"📌 Статус: {status_label}\n\n"
-            f"{ad.description}"
+            f"{description_html}"
         )
-        await message.answer(caption, reply_markup=my_ad_kb(ad.id, ad.active))
+        await message.answer(
+            caption, reply_markup=my_ad_kb(ad.id, ad.active), parse_mode="HTML"
+        )
 
 
 @router.callback_query(F.data.startswith("activate:"))
@@ -771,7 +1130,7 @@ async def exchange_offer_game(
         )
         game = result.scalar_one_or_none()
         if not game:
-            game = Game(name=game_name)
+            game = Game(name=game_name, active=False)
             session.add(game)
             try:
                 await session.commit()

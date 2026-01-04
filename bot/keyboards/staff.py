@@ -379,6 +379,11 @@ def guarantor_deal_kb(deal_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="💬 Открыть чат", callback_data=f"chat:{deal_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="✅ Закрыть", callback_data=f"deal_close_req:{deal_id}"
                 ),
                 InlineKeyboardButton(

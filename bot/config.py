@@ -40,6 +40,24 @@ def _parse_str_list(value: str | None) -> List[str]:
     return [p.strip() for p in value.split(",") if p.strip()]
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    """Handle parse bool.
+
+    Args:
+        value: Raw string value.
+        default: Default value when input is missing.
+
+    Returns:
+        Parsed boolean.
+    """
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     """Represent Settings.
@@ -58,6 +76,15 @@ class Settings:
         usdt_rate_rub: Attribute value.
         min_topup_rub: Attribute value.
         moderation_blacklist: Attribute value.
+        db_auto_backup: Attribute value.
+        db_backup_dir: Attribute value.
+        db_allow_destructive_migrations: Attribute value.
+        roulette_skin_prob: Attribute value.
+        roulette_big_win_prob: Attribute value.
+        send_delay_seconds: Attribute value.
+        send_pause_every: Attribute value.
+        send_pause_seconds: Attribute value.
+        send_max_retries: Attribute value.
     """
 
     bot_token: str
@@ -73,6 +100,15 @@ class Settings:
     usdt_rate_rub: Decimal
     min_topup_rub: Decimal
     moderation_blacklist: List[str]
+    db_auto_backup: bool
+    db_backup_dir: str
+    db_allow_destructive_migrations: bool
+    roulette_skin_prob: Decimal
+    roulette_big_win_prob: Decimal
+    send_delay_seconds: float
+    send_pause_every: int
+    send_pause_seconds: float
+    send_max_retries: int
 
 
 def load_settings() -> Settings:
@@ -112,6 +148,18 @@ def load_settings() -> Settings:
             "быстрый заработок,инвестиции,удаленная работа,работа дома",
         )
     )
+    db_auto_backup = _parse_bool(os.getenv("DB_AUTO_BACKUP"), default=True)
+    db_backup_dir = os.getenv("DB_BACKUP_DIR", "./data/backups").strip()
+    db_allow_destructive_migrations = _parse_bool(
+        os.getenv("DB_ALLOW_DESTRUCTIVE_MIGRATIONS"),
+        default=False,
+    )
+    roulette_skin_prob = Decimal(os.getenv("ROULETTE_SKIN_PROB", "0.00001"))
+    roulette_big_win_prob = Decimal(os.getenv("ROULETTE_BIG_WIN_PROB", "0.001"))
+    send_delay_seconds = float(os.getenv("SEND_DELAY_SECONDS", "0.05"))
+    send_pause_every = int(os.getenv("SEND_PAUSE_EVERY", "500"))
+    send_pause_seconds = float(os.getenv("SEND_PAUSE_SECONDS", "5"))
+    send_max_retries = int(os.getenv("SEND_MAX_RETRIES", "3"))
 
     return Settings(
         bot_token=bot_token,
@@ -127,4 +175,13 @@ def load_settings() -> Settings:
         usdt_rate_rub=usdt_rate_rub,
         min_topup_rub=min_topup_rub,
         moderation_blacklist=moderation_blacklist,
+        db_auto_backup=db_auto_backup,
+        db_backup_dir=db_backup_dir,
+        db_allow_destructive_migrations=db_allow_destructive_migrations,
+        roulette_skin_prob=roulette_skin_prob,
+        roulette_big_win_prob=roulette_big_win_prob,
+        send_delay_seconds=send_delay_seconds,
+        send_pause_every=send_pause_every,
+        send_pause_seconds=send_pause_seconds,
+        send_max_retries=send_max_retries,
     )

@@ -5,11 +5,12 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def services_menu_kb(is_admin: bool) -> InlineKeyboardMarkup:
+def services_menu_kb(is_admin: bool, roulette_cost: str) -> InlineKeyboardMarkup:
     """Handle services menu kb.
 
     Args:
         is_admin: Value for is_admin.
+        roulette_cost: Value for roulette_cost.
 
     Returns:
         Return value.
@@ -20,7 +21,12 @@ def services_menu_kb(is_admin: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Аккаунты", callback_data="services:accounts"),
         ],
         [InlineKeyboardButton(text="Услуги", callback_data="services:services")],
-        [InlineKeyboardButton(text="🎰 Испытай удачу", callback_data="roulette:start")],
+        [
+            InlineKeyboardButton(
+                text=f"🎰 Испытай удачу ({roulette_cost} GSNS)",
+                callback_data="roulette:start",
+            )
+        ],
         [
             InlineKeyboardButton(
                 text="Пополнить GSNS Coins", callback_data="topup:start"
@@ -195,5 +201,29 @@ def topup_confirm_kb() -> InlineKeyboardMarkup:
                     text="Нет, отменить", callback_data="topup_confirm:no"
                 ),
             ]
+        ]
+    )
+
+
+def roulette_result_kb() -> InlineKeyboardMarkup:
+    """Handle roulette result kb.
+
+    Returns:
+        Return value.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎰 Крутить еще раз",
+                    callback_data="roulette:start",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Меню",
+                    callback_data="services:menu",
+                )
+            ],
         ]
     )

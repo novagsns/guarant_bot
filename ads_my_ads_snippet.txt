@@ -1,0 +1,83 @@
+async def my_ads(message: Message, sessionmaker: async_sessionmaker) -> None:
+
+    """Handle my ads.
+
+
+
+    Args:
+
+        message: Value for message.
+
+        sessionmaker: Value for sessionmaker.
+
+    """
+
+    async with sessionmaker() as session:
+
+        result = await session.execute(
+
+            select(Ad, Game)
+
+            .join(Game, Game.id == Ad.game_id)
+
+            .where(
+
+                Ad.seller_id == message.from_user.id,
+
+                Ad.ad_kind == "sale",
+
+            )
+
+            .order_by(Ad.created_at.desc())
+
+        )
+
+        rows = result.all()
+
+
+
+    if not rows:
+
+        await message.answer("Пока нет объявлений.")
+
+        return
+
+
+
+    for ad, game in rows:
+
+        status = ad.moderation_status
+
+        if status == "pending":
+
+            status_label = "на модерации"
+
+        elif status == "rejected":
+
+            status_label = "отклонено"
+
+        else:
+
+            status_label = "активно" if ad.active else "не активно"
+
+        caption = (
+
+            f"<b>{ad.title}</b>\n"
+
+            f"🎮 Игра: {game.name}\n"
+
+            f"💰 Цена: {ad.price} ₽\n"
+
+            f"📌 Статус: {status_label}\n\n"
+
+            f"{ad.description}"
+
+        )
+
+        await message.answer(caption, reply_markup=my_ad_kb(ad.id, ad.active))
+
+
+
+
+
+@router.callback_query

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal, InvalidOperation
 import random
 
@@ -25,6 +26,7 @@ from bot.handlers.helpers import get_or_create_user
 from bot.keyboards.common import referral_kb
 from bot.keyboards.services import (
     my_service_kb,
+    roulette_result_kb,
     service_buy_kb,
     service_chat_kb,
     service_list_kb,
@@ -38,6 +40,9 @@ from bot.utils.moderation import contains_prohibited
 from bot.utils.roles import is_owner
 
 router = Router()
+
+ROULETTE_SPIN_COST = Decimal("500")
+ROULETTE_BIG_WIN_AMOUNT = Decimal("5000")
 
 
 class ServiceCreateStates(StatesGroup):
@@ -112,21 +117,51 @@ class ServiceChatStates(StatesGroup):
     in_chat = State()
 
 
-def _roll_roulette() -> tuple[str, Decimal]:
+def _roll_roulette(
+    *,
+    skin_prob: Decimal,
+    big_win_prob: Decimal,
+) -> tuple[str, Decimal]:
     """Handle roll roulette.
+
+    Args:
+        skin_prob: Probability of the skin prize.
+        big_win_prob: Probability of the big win.
 
     Returns:
         Return value.
     """
     roll = random.random()
-    skin_prob = Decimal("0.00001")
-    big_prob = Decimal("0.01")
+    big_prob = big_win_prob
     roll_dec = Decimal(str(roll))
     if roll_dec < skin_prob:
         return "skin", Decimal("0")
     if roll_dec < skin_prob + big_prob:
-        return "coins", Decimal("5000")
-    return "coins", Decimal(str(random.randint(0, 50)))
+        return "coins", ROULETTE_BIG_WIN_AMOUNT
+    return "coins", Decimal(str(random.randint(0, 500)))
+
+
+async def _animate_roulette(message: Message) -> None:
+    """Render a roulette animation without spamming the chat."""
+    variants = [
+        ["🎰 Крутим", "🎰 Крутим.", "🎰 Крутим..", "🎰 Крутим..."],
+        ["🎰 Запуск", "🎰 Вращение", "🎰 Почти...", "🎰 Стоп!"],
+        [
+            "🎰 Крутим",
+            "🎰 Крутим.",
+            "🎰 Крутим..",
+            "🎰 Крутим...",
+            "🎰 Крутим....",
+            "🎰 Стоп!",
+        ],
+    ]
+    frames = random.choice(variants)
+    for frame in frames:
+        await asyncio.sleep(0.5)
+        try:
+            await message.edit_text(frame)
+        except Exception:
+            return
 
 
 @router.callback_query(F.data == "roulette:start")
@@ -142,7 +177,7 @@ async def roulette_start(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
-    cost = Decimal("500")
+    cost = ROULETTE_SPIN_COST
     async with sessionmaker() as session:
         user = await get_or_create_user(session, callback.from_user)
         if (user.balance or 0) < cost:
@@ -159,7 +194,10 @@ async def roulette_start(
             )
         )
 
-        prize_type, prize_amount = _roll_roulette()
+        prize_type, prize_amount = _roll_roulette(
+            skin_prob=settings.roulette_skin_prob,
+            big_win_prob=settings.roulette_big_win_prob,
+        )
         if prize_type == "coins" and prize_amount > 0:
             user.balance = (user.balance or 0) + prize_amount
             session.add(
@@ -180,9 +218,31 @@ async def roulette_start(
         session.add(spin)
         await session.commit()
 
+        new_balance = Decimal(str(user.balance or 0))
+
+    spin_message = callback.message
+    if spin_message:
+        try:
+            await spin_message.edit_text("🎰 Крутим...")
+        except Exception:
+            spin_message = await callback.message.answer("🎰 Крутим...")
+    else:
+        spin_message = await callback.message.answer("🎰 Крутим...")
+    await _animate_roulette(spin_message)
+    prize_fund_text = (
+        "Призы рулетки:\n"
+        "🎯 0–500 GSNS Coins\n"
+        "💥 5000 GSNS Coins — джекпот\n"
+        "🎁 Скин события"
+    )
+
     if prize_type == "skin":
-        await callback.message.answer(
-            "Вы выиграли приз: Скин события! Мы свяжемся с вами."
+        await spin_message.edit_text(
+            "🎁 Приз: Скин события\n"
+            f"Баланс: {new_balance} GSNS Coins\n"
+            f"{prize_fund_text}\n"
+            "Мы свяжемся с вами.",
+            reply_markup=roulette_result_kb(),
         )
         chat_id, topic_id = get_admin_target(settings)
         if chat_id != 0:
@@ -196,9 +256,23 @@ async def roulette_start(
                 message_thread_id=topic_id,
             )
     elif prize_amount > 0:
-        await callback.message.answer(f"Выигрыш: {prize_amount} GSNS Coins.")
+        title = "🎉 Выигрыш!"
+        if prize_amount >= ROULETTE_BIG_WIN_AMOUNT:
+            title = "💥 Джекпот!"
+        await spin_message.edit_text(
+            f"{title}\n"
+            f"+{prize_amount} GSNS Coins\n"
+            f"Баланс: {new_balance} GSNS Coins\n"
+            f"{prize_fund_text}",
+            reply_markup=roulette_result_kb(),
+        )
     else:
-        await callback.message.answer("Увы, не повезло. Попробуйте снова!")
+        await spin_message.edit_text(
+            "Увы, не повезло. Попробуйте снова!\n"
+            f"Баланс: {new_balance} GSNS Coins\n"
+            f"{prize_fund_text}",
+            reply_markup=roulette_result_kb(),
+        )
     await callback.answer()
 
 
@@ -341,7 +415,11 @@ async def services_menu(
         is_admin = _is_admin(user.role) or is_owner(
             user.role, settings.owner_ids, user.id
         )
-    await message.answer("Раздел услуг GSNS:", reply_markup=services_menu_kb(is_admin))
+    await message.answer(
+        "Раздел услуг GSNS:",
+        reply_markup=services_menu_kb(is_admin, str(ROULETTE_SPIN_COST)),
+    )
+    await message.answer(f"Стоимость крутки: {ROULETTE_SPIN_COST} GSNS Coins.")
     await message.answer(
         "Выгодный донат для вашей игры:",
         reply_markup=referral_kb(),
@@ -375,6 +453,14 @@ async def services_category(
             await callback.answer("Нет доступа.")
             return
         await _start_service_create(callback, state)
+        return
+
+    if action == "menu":
+        await callback.message.edit_text(
+            "Раздел услуг GSNS:",
+            reply_markup=services_menu_kb(is_admin_user, str(ROULETTE_SPIN_COST)),
+        )
+        await callback.answer()
         return
 
     if action == "mine":
@@ -1080,6 +1166,31 @@ async def topup_ok(
         if not topup or topup.status != "pending":
             await callback.answer("Заявка не найдена.")
             return
+        if topup.amount_rub is not None:
+            expected = (topup.amount_rub * settings.coins_per_rub).quantize(
+                Decimal("0.01")
+            )
+            actual = Decimal(str(topup.amount or 0))
+            diff = (expected - actual).copy_abs()
+            if diff > Decimal("0.01"):
+                topup.status = "rejected"
+                topup.reason = "Несоответствие суммы пополнения"
+                topup.reviewer_id = reviewer.id
+                await session.commit()
+                await callback.answer("Сумма не совпадает. Требуется проверка.")
+                chat_id, topic_id = get_admin_target(settings)
+                if chat_id != 0:
+                    await callback.bot.send_message(
+                        chat_id,
+                        (
+                            f"Подозрительное пополнение #{topup.id}\n"
+                            f"Пользователь: {topup.user_id}\n"
+                            f"Ожидалось: {expected} Coins\n"
+                            f"Фактически: {actual} Coins"
+                        ),
+                        message_thread_id=topic_id,
+                    )
+                return
 
         result = await session.execute(select(User).where(User.id == topup.user_id))
         user = result.scalar_one_or_none()

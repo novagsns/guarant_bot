@@ -125,18 +125,30 @@ async def info_staff(callback: CallbackQuery, sessionmaker: async_sessionmaker) 
         )
         users = result.scalars().all()
 
-    if not users:
-        await callback.message.edit_text(
-            "Сотрудники пока не назначены.", reply_markup=info_back_kb()
-        )
-        await callback.answer()
-        return
-
-    lines = ["👥 <b>Сотрудники GSNS</b>:"]
+    role_order = ["owner", "admin", "moderator", "guarantor", "designer"]
+    grouped = {role: [] for role in role_order}
     for user in users:
-        label = role_label(user.role)
-        name = f"@{user.username}" if user.username else f"id:{user.id}"
-        lines.append(f"• {label}: {name}")
+        if user.role in grouped:
+            grouped[user.role].append(user)
+
+    lines = [
+        "👥 <b>Команда GSNS</b>",
+        "—",
+        "👑 <b>Основатель</b>",
+        "• @nsim_GSNS",
+        "—",
+    ]
+    for role in role_order:
+        members = grouped.get(role) or []
+        if not members:
+            continue
+        title = role_label(role)
+        names = []
+        for member in members:
+            names.append(f"@{member.username}" if member.username else f"id:{member.id}")
+        lines.append(f"💼 <b>{title}</b>")
+        lines.append(f"• {', '.join(names)}")
+
     await callback.message.edit_text("\n".join(lines), reply_markup=info_back_kb())
     await callback.answer()
 

@@ -6,13 +6,21 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def game_list_kb(
-    games: list[tuple[int, str]], prefix: str = "game"
+    games: list[tuple[int, str]],
+    *,
+    prefix: str = "game",
+    page: int = 1,
+    total_pages: int = 1,
+    include_all: bool = False,
 ) -> InlineKeyboardMarkup:
     """Handle game list kb.
 
     Args:
         games: Value for games.
         prefix: Value for prefix.
+        page: Value for page.
+        total_pages: Value for total_pages.
+        include_all: Value for include_all.
 
     Returns:
         Return value.
@@ -21,6 +29,28 @@ def game_list_kb(
         [InlineKeyboardButton(text=name, callback_data=f"{prefix}:{game_id}")]
         for game_id, name in games
     ]
+    if include_all:
+        rows.append([InlineKeyboardButton(text="Все игры", callback_data=f"{prefix}:0")])
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️", callback_data=f"game_page:{page - 1}"
+                )
+            )
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{page}/{total_pages}", callback_data="noop"
+            )
+        )
+        if page < total_pages:
+            nav.append(
+                InlineKeyboardButton(
+                    text="➡️", callback_data=f"game_page:{page + 1}"
+                )
+            )
+        rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -184,13 +214,17 @@ def seller_price_kb(
 
 
 def deal_after_take_kb(
-    deal_id: int, *, role: str | None = None
+    deal_id: int,
+    *,
+    role: str | None = None,
+    guarantor_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     """Handle deal after take kb.
 
     Args:
         deal_id: Value for deal_id.
         role: Value for role.
+        guarantor_id: Value for guarantor_id.
 
     Returns:
         Return value.
@@ -203,6 +237,16 @@ def deal_after_take_kb(
             )
         ]
     ]
+
+    if guarantor_id and role in {None, "buyer", "seller"}:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⭐ Отзывы гаранта",
+                    callback_data=f"guarantor_reviews:{deal_id}:{guarantor_id}",
+                )
+            ]
+        )
 
     if role in {None, "buyer"}:
         rows.append(
@@ -327,6 +371,7 @@ def account_filter_kb(game_id: int | None = None) -> InlineKeyboardMarkup:
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="Все цены", callback_data=f"{prefix}all")],
             [
                 InlineKeyboardButton(
                     text="До 9 999 руб.", callback_data=f"{prefix}0-9999"

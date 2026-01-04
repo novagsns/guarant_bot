@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -36,7 +46,7 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(String(64))
     full_name: Mapped[str | None] = mapped_column(String(128))
     role: Mapped[str] = mapped_column(String(32), default="user")
@@ -115,7 +125,9 @@ class Ad(Base):
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id"))
     ad_kind: Mapped[str] = mapped_column(String(16), default="sale")
     title: Mapped[str] = mapped_column(String(120))
+    title_html: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text)
+    description_html: Mapped[str | None] = mapped_column(Text)
     price: Mapped[float] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(8), default="RUB")
     payment_methods: Mapped[str | None] = mapped_column(String(64))
@@ -124,6 +136,7 @@ class Ad(Base):
     media_file_id: Mapped[str | None] = mapped_column(String(256))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     moderation_status: Mapped[str] = mapped_column(String(16), default="approved")
+    moderation_reason: Mapped[str | None] = mapped_column(Text)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -147,6 +160,9 @@ class Deal(Base):
         deal_type: Attribute value.
         price: Attribute value.
         fee: Attribute value.
+        room_chat_id: Attribute value.
+        room_invite_link: Attribute value.
+        room_ready: Attribute value.
         closed_at: Attribute value.
         created_at: Attribute value.
     """
@@ -162,7 +178,68 @@ class Deal(Base):
     deal_type: Mapped[str] = mapped_column(String(32), default="buy")
     price: Mapped[float | None] = mapped_column(Numeric(12, 2))
     fee: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    room_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    room_invite_link: Mapped[str | None] = mapped_column(Text)
+    room_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class DealRoom(Base):
+    """Represent DealRoom.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        chat_id: Attribute value.
+        title: Attribute value.
+        invite_link: Attribute value.
+        active: Attribute value.
+        created_by: Attribute value.
+        assigned_deal_id: Attribute value.
+        created_at: Attribute value.
+    """
+
+    __tablename__ = "deal_rooms"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    title: Mapped[str | None] = mapped_column(String(255))
+    invite_link: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    assigned_deal_id: Mapped[int | None] = mapped_column(ForeignKey("deals.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class DealMessage(Base):
+    """Represent DealMessage.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        deal_id: Attribute value.
+        sender_id: Attribute value.
+        sender_role: Attribute value.
+        message_type: Attribute value.
+        text: Attribute value.
+        file_id: Attribute value.
+        created_at: Attribute value.
+    """
+
+    __tablename__ = "deal_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deal_id: Mapped[int] = mapped_column(ForeignKey("deals.id"))
+    sender_id: Mapped[int] = mapped_column(BigInteger)
+    sender_role: Mapped[str] = mapped_column(String(16))
+    message_type: Mapped[str] = mapped_column(String(16), default="text")
+    text: Mapped[str | None] = mapped_column(Text)
+    file_id: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -184,7 +261,7 @@ class ModerationChat(Base):
     __tablename__ = "moderation_chats"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer, unique=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     title: Mapped[str | None] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
@@ -298,8 +375,8 @@ class ModerationCase(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(String(32))
-    chat_id: Mapped[int] = mapped_column(Integer)
-    user_id: Mapped[int | None] = mapped_column(Integer)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int | None] = mapped_column(BigInteger)
     payload: Mapped[str | None] = mapped_column(Text)
     prev_role: Mapped[str | None] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(16), default="pending")
@@ -323,8 +400,8 @@ class ModerationMemberEvent(Base):
     __tablename__ = "moderation_member_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer)
-    user_id: Mapped[int] = mapped_column(Integer)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int] = mapped_column(BigInteger)
     event_type: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -350,8 +427,8 @@ class ModerationRestriction(Base):
     __tablename__ = "moderation_restrictions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(Integer)
-    user_id: Mapped[int] = mapped_column(Integer)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int] = mapped_column(BigInteger)
     action: Mapped[str] = mapped_column(String(16))
     reason: Mapped[str | None] = mapped_column(String(255))
     until_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -359,6 +436,32 @@ class ModerationRestriction(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ModerationWarn(Base):
+    """Represent ModerationWarn.
+
+    Attributes:
+        id: Attribute value.
+        chat_id: Attribute value.
+        user_id: Attribute value.
+        count: Attribute value.
+        created_at: Attribute value.
+        updated_at: Attribute value.
+    """
+
+    __tablename__ = "moderation_warns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now()
     )
 
 
@@ -657,7 +760,7 @@ class Scammer(Base):
     __tablename__ = "scammers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(BigInteger)
     username: Mapped[str | None] = mapped_column(String(64))
     account_id: Mapped[str | None] = mapped_column(String(64))
     account_details: Mapped[str | None] = mapped_column(Text)
@@ -762,6 +865,14 @@ class Review(Base):
     """
 
     __tablename__ = "reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "deal_id",
+            "author_id",
+            "target_id",
+            name="uq_reviews_deal_author_target",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     deal_id: Mapped[int | None] = mapped_column(ForeignKey("deals.id"))
@@ -794,7 +905,7 @@ class Dispute(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     deal_id: Mapped[int] = mapped_column(ForeignKey("deals.id"))
     reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    winner_id: Mapped[int | None] = mapped_column(Integer)
+    winner_id: Mapped[int | None] = mapped_column(BigInteger)
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default="open")
     created_at: Mapped[datetime] = mapped_column(
