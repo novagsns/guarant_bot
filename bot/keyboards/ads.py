@@ -288,6 +288,23 @@ def deal_after_take_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def deal_room_guarantor_kb(deal_id: int) -> InlineKeyboardMarkup:
+    """Handle guarantor buttons inside the deal room."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Завершить сделку", callback_data=f"deal_close_req:{deal_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отменить сделку", callback_data=f"deal_cancel_req:{deal_id}"
+                ),
+            ]
+        ]
+    )
+
+
 def my_ad_kb(ad_id: int, active: bool) -> InlineKeyboardMarkup:
     """Handle my ad kb.
 

@@ -6,6 +6,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -39,6 +40,7 @@ from bot.keyboards.ads import (
     admin_take_deal_kb,
     contact_open_kb,
     deal_after_take_kb,
+    deal_room_guarantor_kb,
     prechat_action_kb,
     prechat_finish_kb,
     seller_price_kb,
@@ -361,6 +363,22 @@ async def _assign_deal_room(
     return room, None
 
 
+async def _release_deal_room(session, deal: Deal) -> None:
+    """Release room assignment after a deal completes or cancels."""
+
+    if deal.room_chat_id:
+        result = await session.execute(
+            select(DealRoom).where(DealRoom.chat_id == deal.room_chat_id)
+        )
+        room = result.scalar_one_or_none()
+        if room:
+            room.assigned_deal_id = None
+            room.invite_link = None
+    deal.room_chat_id = None
+    deal.room_invite_link = None
+    deal.room_ready = False
+
+
 async def _mark_room_ready_and_notify(
     bot,
     sessionmaker: async_sessionmaker,
@@ -394,6 +412,22 @@ async def _mark_room_ready_and_notify(
     )
 
 
+async def _room_has_all_participants(bot, chat_id: int, deal: Deal) -> bool:
+    """Check whether buyer, seller, and guarantor are present in the room."""
+
+    if not deal.guarantee_id:
+        return False
+
+    for user_id in (deal.buyer_id, deal.seller_id, deal.guarantee_id):
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+        except TelegramBadRequest:
+            return False
+        if not _is_room_member_status(member.status):
+            return False
+    return True
+
+
 async def _send_deal_room_intro(
     bot,
     sessionmaker: async_sessionmaker,
@@ -402,6 +436,10 @@ async def _send_deal_room_intro(
     chat_id: int,
 ) -> None:
     """Send deal details and role-specific buttons into the room chat."""
+
+    if not await _room_has_all_participants(bot, chat_id, deal):
+        return
+
     async with sessionmaker() as session:
         buyer = await session.get(User, deal.buyer_id)
         seller = await session.get(User, deal.seller_id)
@@ -412,23 +450,25 @@ async def _send_deal_room_intro(
     buyer_label = await _format_user(buyer) if buyer else "id:-"
     seller_label = await _format_user(seller) if seller else "id:-"
     guarantor_label = await _format_user(guarantor) if guarantor else "—"
-    text = (
-        "🤝 <b>Сделка</b>\n"
-        f"ID: {deal.id}\n"
-        f"Покупатель: {buyer_label}\n"
-        f"Продавец: {seller_label}\n"
-        f"Гарант: {guarantor_label}\n"
-        f"Ваша роль: {role}\n"
-        "Используйте кнопки ниже для действий."
-    )
+    lines = [
+        "🤝 <b>Сделка</b>",
+        f"ID: {deal.id}",
+        f"Покупатель: {buyer_label}",
+        f"Продавец: {seller_label}",
+        f"Гарант: {guarantor_label}",
+        f"Ваша роль: {role}",
+    ]
+    if role == "guarantor":
+        lines.append("Гарант может завершить или отменить сделку кнопками ниже.")
+        markup = deal_room_guarantor_kb(deal.id)
+    else:
+        lines.append("Кнопки в этом чате доступны только гаранту. Ждите инструкций.")
+        markup = None
+
     await bot.send_message(
         chat_id,
-        text,
-        reply_markup=deal_after_take_kb(
-            deal.id,
-            role=role,
-            guarantor_id=deal.guarantee_id,
-        ),
+        "\n".join(lines),
+        reply_markup=markup,
         parse_mode="HTML",
     )
 

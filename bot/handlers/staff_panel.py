@@ -40,7 +40,11 @@ from bot.db.models import (
     WalletTransaction,
 )
 from bot.handlers.helpers import get_or_create_user
-from bot.handlers.deals import _assign_deal_room, _notify_room_pool_low
+from bot.handlers.deals import (
+    _assign_deal_room,
+    _notify_room_pool_low,
+    _release_deal_room,
+)
 from bot.keyboards.ads import deal_after_take_kb
 from bot.keyboards.staff import (
     admin_panel_kb,
@@ -2427,6 +2431,7 @@ async def deal_close_yes(
                         description=f"Сделка #{deal.id}",
                     )
                 )
+        await _release_deal_room(session, deal)
         await session.commit()
     await callback.message.answer(f"Сделка #{deal_id} закрыта.")
     review_kb = InlineKeyboardMarkup(
@@ -2496,6 +2501,7 @@ async def deal_cancel(
             ref_type="deal",
             ref_id=deal.id,
         )
+        await _release_deal_room(session, deal)
         await session.commit()
     await callback.message.answer(f"Сделка #{deal_id} отменена.")
     await _log_admin(
