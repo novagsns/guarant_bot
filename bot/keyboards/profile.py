@@ -35,6 +35,7 @@ def profile_actions_kb() -> InlineKeyboardMarkup:
                     callback_data="profile:service_purchases",
                 )
             ],
+            [InlineKeyboardButton(text="📝 Отзывы", callback_data="profile:reviews")],
             [InlineKeyboardButton(text="💎 VIP функции", callback_data="profile:vip")],
         ]
     )

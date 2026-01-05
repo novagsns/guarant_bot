@@ -475,6 +475,44 @@ async def profile_wallet(
     await callback.answer()
 
 
+@router.callback_query(F.data == "profile:reviews")
+async def profile_reviews(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle profile reviews."""
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(Review, User)
+            .join(User, User.id == Review.author_id)
+            .where(
+                Review.target_id == callback.from_user.id,
+                Review.status == "active",
+            )
+            .order_by(Review.created_at.desc())
+            .limit(10)
+        )
+        rows = result.all()
+    if not rows:
+        await callback.message.answer("Пока нет активных отзывов.")
+        await callback.answer()
+        return
+    texts = []
+    for review, author in rows:
+        author_label = (
+            f"@{author.username}" if author.username else str(author.id)
+        )
+        comment = review.comment or "без комментария"
+        created = review.created_at.strftime("%Y-%m-%d") if review.created_at else "-"
+        texts.append(
+            f"Отзыв #{review.id} — {review.rating}/5\n"
+            f"{comment}\n"
+            f"от {author_label} — {created}"
+        )
+    await callback.message.answer("\n\n".join(texts))
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("wallet_tx:"))
 async def wallet_tx_detail(
     callback: CallbackQuery, sessionmaker: async_sessionmaker

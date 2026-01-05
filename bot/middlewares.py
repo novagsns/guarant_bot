@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import re
 from typing import Any, Awaitable, Callable, Dict
 
@@ -64,6 +65,7 @@ class AccessMiddleware(BaseMiddleware):
         super().__init__()
         self._sessionmaker = sessionmaker
         self._settings = settings
+        self._last_warning: dict[int, datetime] = {}
 
     async def __call__(
         self,
@@ -134,54 +136,43 @@ class AccessMiddleware(BaseMiddleware):
                 )
                 await session.commit()
 
-        return await _block_if_not_support(event, data, handler)
+        return await self._block_if_not_support(event, data, handler)
 
 
-async def _block_if_not_support(event, data, handler):
-    """Handle block if not support.
-
-    Args:
-        event: Value for event.
-        data: Value for data.
-        handler: Value for handler.
-
-    Returns:
-        Return value.
-    """
-    if isinstance(event, CallbackQuery):
-        if event.data == "support:start":
-            return await handler(event, data)
-        await event.message.answer(
-            "Ваш доступ ограничен. Доступна только поддержка.",
-            reply_markup=support_only_kb(),
-        )
-        await event.answer()
-        return None
-
-    if isinstance(event, Message):
-        state = data.get("state")
-        if state:
-            try:
-                current = await state.get_state()
-                if current and current.endswith("SupportStates:active"):
-                    return await handler(event, data)
-            except Exception:
-                pass
-        if event.text and event.text.strip().startswith("/support"):
-            return await handler(event, data)
-        if event.text and event.text.strip().startswith("/start"):
-            await event.answer(
+    async def _block_if_not_support(self, event, data, handler):
+        if isinstance(event, CallbackQuery):
+            if event.data == "support:start":
+                return await handler(event, data)
+            await event.message.answer(
                 "Ваш доступ ограничен. Доступна только поддержка.",
                 reply_markup=support_only_kb(),
             )
+            await event.answer()
             return None
-        await event.answer(
-            "Ваш доступ ограничен. Доступна только поддержка.",
-            reply_markup=support_only_kb(),
-        )
-        return None
 
-    return await handler(event, data)
+        if isinstance(event, Message):
+            state = data.get("state")
+            if state:
+                try:
+                    current = await state.get_state()
+                    if current and current.endswith("SupportStates:active"):
+                        return await handler(event, data)
+                except Exception:
+                    pass
+            if event.text and event.text.strip().startswith("/support"):
+                return await handler(event, data)
+
+            now = datetime.utcnow()
+            last = self._last_warning.get(event.from_user.id)
+            if not last or now - last >= timedelta(minutes=1):
+                await event.answer(
+                    "Ваш доступ ограничен. Доступна только поддержка.",
+                    reply_markup=support_only_kb(),
+                )
+                self._last_warning[event.from_user.id] = now
+            return None
+
+        return await handler(event, data)
 
 
 class ActionLogMiddleware(BaseMiddleware):
