@@ -475,12 +475,19 @@ async def profile_wallet(
     await callback.answer()
 
 
-@router.callback_query(F.data == "profile:reviews")
+@router.callback_query(F.data.startswith("profile:reviews"))
 async def profile_reviews(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
 ) -> None:
     """Handle profile reviews (guarantors)."""
+    parts = callback.data.split(":")
+    page = 1
+    if len(parts) > 2 and parts[2].isdigit():
+        page = max(int(parts[2]), 1)
+    per_page = 5
+    limit = per_page + 1
+    offset = (page - 1) * per_page
     async with sessionmaker() as session:
         result = await session.execute(
             select(Review, Deal, User)
@@ -491,9 +498,12 @@ async def profile_reviews(
                 Deal.guarantee_id.is_not(None),
             )
             .order_by(Deal.id.desc(), Review.id.asc())
-            .limit(40)
+            .limit(limit)
+            .offset(offset)
         )
         rows = result.all()
+    has_more = len(rows) > per_page
+    rows = rows[:per_page]
     if not rows:
         await callback.message.answer("Пока нет отзывов гарантов.")
         await callback.answer()
@@ -527,7 +537,8 @@ async def profile_reviews(
             guarantors = {user.id: user for user in result.scalars().all()}
 
     texts = []
-    for deal_id, entry in sorted(entries.items(), reverse=True):
+    sorted_items = sorted(entries.items(), key=lambda item: item[0], reverse=True)
+    for deal_id, entry in sorted_items:
         deal: Deal = entry["deal"]
         guarantor = guarantors.get(entry.get("guarantor_id"))
         guarantor_label = (
@@ -558,7 +569,24 @@ async def profile_reviews(
             avg = sum(ratings) / len(ratings)
             lines.append(f"Оценка: {avg:.1f}/5")
         texts.append("\n".join(lines))
-    await callback.message.answer("\n\n".join(texts))
+    nav: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️",
+                callback_data=f"profile:reviews:{page-1}",
+            )
+        )
+    nav.append(InlineKeyboardButton(text=f"{page}", callback_data="noop"))
+    if has_more:
+        nav.append(
+            InlineKeyboardButton(
+                text="▶️",
+                callback_data=f"profile:reviews:{page+1}",
+            )
+        )
+    markup = InlineKeyboardMarkup(inline_keyboard=[nav]) if nav else None
+    await callback.message.answer("\n\n".join(texts), reply_markup=markup)
     await callback.answer()
 
 
