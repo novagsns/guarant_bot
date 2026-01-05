@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated,
@@ -46,7 +46,7 @@ router = Router()
 
 def _parse_target_and_reason(
     message: Message, args: list[str]
-) -> tuple[int | None, str]:
+) -> tuple[int | str | None, str]:
     """Обрабатывает parse target and reason.
 
     Аргументы:
@@ -64,9 +64,13 @@ def _parse_target_and_reason(
             return message.reply_to_message.from_user.id, reason or "-"
     if not args:
         return None, ""
-    raw_id = args[0].lstrip("@")
-    if not raw_id.isdigit():
-        return None, ""
+    raw_id = args[0]
+    reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
+    if raw_id.lstrip("@").isdigit():
+        return int(raw_id.lstrip("@")), reason or "-"
+    if raw_id.startswith("@"):
+        return raw_id, reason or "-"
+    return None, ""
     reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
     return int(raw_id), reason or "-"
 
@@ -129,6 +133,21 @@ def _normalize_reason(reason: str | None) -> str:
     if not clean or clean == "-":
         return "Причина не указана"
     return clean
+
+
+async def _resolve_user_identifier(bot, identifier: int | str | None) -> int | None:
+    if identifier is None:
+        return None
+    if isinstance(identifier, int):
+        return identifier
+    username = identifier.lstrip("@")
+    if not username:
+        return None
+    try:
+        user = await bot.get_chat(f"@{username}")
+    except TelegramBadRequest:
+        return None
+    return user.id
 
 
 async def _upsert_restriction(
@@ -331,7 +350,8 @@ async def cmd_ban(
         return
 
     parts = (message.text or "").split()
-    target_id, reason = _parse_target_and_reason(message, parts[1:])
+    target_identifier, reason = _parse_target_and_reason(message, parts[1:])
+    target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
             "Формат: /ban <user_id> [причина] или ответом на сообщение."
@@ -407,7 +427,8 @@ async def cmd_unban(
         return
 
     parts = (message.text or "").split()
-    target_id, _ = _parse_target_and_reason(message, parts[1:])
+    target_identifier, _ = _parse_target_and_reason(message, parts[1:])
+    target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer("Формат: /unban <user_id> или ответом на сообщение.")
         return
@@ -551,7 +572,8 @@ async def cmd_unmute(
         return
 
     parts = (message.text or "").split()
-    target_id, _ = _parse_target_and_reason(message, parts[1:])
+    target_identifier, _ = _parse_target_and_reason(message, parts[1:])
+    target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer("Формат: /unmute <user_id> или ответом на сообщение.")
         return
@@ -603,7 +625,8 @@ async def cmd_warn(
         return
 
     parts = (message.text or "").split()
-    target_id, reason = _parse_target_and_reason(message, parts[1:])
+    target_identifier, reason = _parse_target_and_reason(message, parts[1:])
+    target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
             "Формат: /warn <user_id> [причина] " "или ответом на сообщение."
