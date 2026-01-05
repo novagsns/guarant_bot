@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import html
 import re
 from decimal import Decimal, InvalidOperation
+from typing import Awaitable, Callable
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -53,6 +54,29 @@ from bot.utils.broadcasts import create_broadcast_request
 from bot.utils.vip import free_fee_active, is_vip_until
 
 router = Router()
+
+_profile_message_ids: dict[int, int] = {}
+
+
+async def _cleanup_profile_message(user_id: int, bot) -> None:
+    msg_id = _profile_message_ids.pop(user_id, None)
+    if not msg_id:
+        return
+    try:
+        await bot.delete_message(user_id, msg_id)
+    except Exception:
+        pass
+
+
+async def _send_profile_view(
+    user_id: int,
+    bot,
+    sender: Callable[[], Awaitable[Message]],
+) -> Message:
+    await _cleanup_profile_message(user_id, bot)
+    msg = await sender()
+    _profile_message_ids[user_id] = msg.message_id
+    return msg
 
 
 class AdEditStates(StatesGroup):
@@ -408,7 +432,11 @@ async def profile_main(
         f"📢 Активных объявлений: <b>{len(ads)}</b>\n"
         f"🔗 Реферальная ссылка: {referral_link}"
     )
-    await message.answer(text, reply_markup=profile_actions_kb())
+    await _send_profile_view(
+        message.from_user.id,
+        message.bot,
+        lambda: message.answer(text, reply_markup=profile_actions_kb()),
+    )
 
 
 @router.callback_query(F.data == "profile:wallet")
@@ -460,7 +488,11 @@ async def profile_wallet(
         ),
         "🧾 Последние операции:",
     ]
-    await callback.message.answer("\n".join(lines))
+    await _send_profile_view(
+        callback.from_user.id,
+        callback.bot,
+        lambda: callback.message.answer("\n".join(lines)),
+    )
     if not rows:
         await callback.message.answer("Операций пока нет.")
     else:
@@ -586,7 +618,11 @@ async def profile_reviews(
             )
         )
     markup = InlineKeyboardMarkup(inline_keyboard=[nav]) if nav else None
-    await callback.message.answer("\n\n".join(texts), reply_markup=markup)
+    await _send_profile_view(
+        callback.from_user.id,
+        callback.bot,
+        lambda: callback.message.answer("\n\n".join(texts), reply_markup=markup),
+    )
     await callback.answer()
 
 
