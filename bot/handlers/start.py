@@ -31,6 +31,7 @@ from bot.keyboards.common import (
 from bot.services.fees import calculate_fee
 from bot.services.trust import apply_trust_event, get_trust_score
 from bot.services.weekly_rewards import grant_pending_rewards
+from bot.utils.roles import is_owner
 from bot.utils.scammers import find_scammer
 from bot.utils.texts import TOOLS_TEXT, WELCOME_TEXT
 
@@ -66,6 +67,14 @@ def _format_until(value) -> str:
         return value.strftime("%Y-%m-%d %H:%M UTC")
     except Exception:
         return "-"
+
+
+def _build_main_menu_markup(user: User, settings: Settings):
+    role = user.role or "user"
+    return main_menu_kb(
+        role,
+        is_owner=is_owner(role, settings.owner_ids, user.id),
+    )
 
 
 async def _sync_user_restrictions(
@@ -298,7 +307,7 @@ async def cmd_start(
     )
     await message.answer(
         f"{WELCOME_TEXT}{trust_block}",
-        reply_markup=main_menu_kb(),
+        reply_markup=_build_main_menu_markup(user, settings),
     )
     await _sync_user_restrictions(message.bot, sessionmaker, message.from_user.id)
     await _send_restrictions_summary(message, sessionmaker)
@@ -335,13 +344,24 @@ async def menu_deals(message: Message) -> None:
 
 
 @router.message(F.text == "⬅️ Назад")
-async def menu_back(message: Message) -> None:
+async def menu_back(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
     """Handle menu back.
 
     Args:
         message: Value for message.
+        sessionmaker: Value for sessionmaker.
+        settings: Value for settings.
     """
-    await message.answer("Главное меню.", reply_markup=main_menu_kb())
+    async with sessionmaker() as session:
+        user = await get_or_create_user(session, message.from_user)
+    await message.answer(
+        "Главное меню.",
+        reply_markup=_build_main_menu_markup(user, settings),
+    )
 
 
 @router.message(F.text == "🧰 Инструменты")
@@ -355,17 +375,26 @@ async def menu_tools(message: Message) -> None:
 
 
 @router.callback_query(F.data == "tools:back")
-async def tools_back(callback: CallbackQuery, state: FSMContext) -> None:
+async def tools_back(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
     """Handle tools back.
 
     Args:
         callback: Value for callback.
         state: Value for state.
+        sessionmaker: Value for sessionmaker.
+        settings: Value for settings.
     """
     await state.clear()
+    async with sessionmaker() as session:
+        user = await get_or_create_user(session, callback.from_user)
     await callback.message.answer(
         "\u0413\u043b\u0430\u0432\u043d\u043e\u0435 \u043c\u0435\u043d\u044e.",
-        reply_markup=main_menu_kb(),
+        reply_markup=_build_main_menu_markup(user, settings),
     )
     await callback.answer()
 
@@ -571,7 +600,12 @@ async def tools_fee_addon(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == "/cancel")
 @router.message(F.text == "Отмена")
-async def cancel_flow(message: Message, state: FSMContext) -> None:
+async def cancel_flow(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
     """Handle cancel flow.
 
     Args:
@@ -579,4 +613,9 @@ async def cancel_flow(message: Message, state: FSMContext) -> None:
         state: Value for state.
     """
     await state.clear()
-    await message.answer("✅ Действие отменено.", reply_markup=main_menu_kb())
+    async with sessionmaker() as session:
+        user = await get_or_create_user(session, message.from_user)
+    await message.answer(
+        "✅ Действие отменено.",
+        reply_markup=_build_main_menu_markup(user, settings),
+    )

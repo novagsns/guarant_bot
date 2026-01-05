@@ -5,10 +5,17 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from bot.utils.roles import is_staff
+
 REVIEW_MENU_BUTTON = "📝 Просмотреть отзывы"
+OWNER_PANEL_BUTTON = "👑 Управление персоналом"
+STAFF_PANEL_BUTTON = "💼 Рабочая панель"
 
-
-def main_menu_kb() -> ReplyKeyboardMarkup:
+def main_menu_kb(
+    role: str | None = None,
+    *,
+    is_owner: bool = False,
+) -> ReplyKeyboardMarkup:
     """Handle main menu kb.
 
     Returns:
@@ -26,7 +33,19 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             ],
             [KeyboardButton(text="ℹ️ Информация")],
             [KeyboardButton(text=REVIEW_MENU_BUTTON)],
-            [KeyboardButton(text="👑 Управление персоналом")],
+            *(
+                [
+                    [KeyboardButton(text=OWNER_PANEL_BUTTON)],
+                ]
+                if is_owner or role == "admin"
+                else (
+                    [
+                        [KeyboardButton(text=STAFF_PANEL_BUTTON)],
+                    ]
+                    if role and is_staff(role)
+                    else []
+                )
+            ),
         ],
         resize_keyboard=True,
     )

@@ -46,6 +46,7 @@ from bot.handlers.deals import (
     _release_deal_room,
 )
 from bot.keyboards.ads import deal_after_take_kb
+from bot.keyboards.common import OWNER_PANEL_BUTTON, STAFF_PANEL_BUTTON
 from bot.keyboards.staff import (
     admin_panel_kb,
     complaint_kb,
@@ -449,7 +450,7 @@ async def _recalc_rating(session, user_id: int) -> None:
         await session.commit()
 
 
-@router.message(F.text == "👑 Управление персоналом")
+@router.message(F.text.in_({OWNER_PANEL_BUTTON, STAFF_PANEL_BUTTON}))
 async def staff_entry(
     message: Message,
     sessionmaker: async_sessionmaker,
