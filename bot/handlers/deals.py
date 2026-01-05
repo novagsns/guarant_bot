@@ -304,7 +304,7 @@ async def _log_deal_message(
 
 def _is_room_member_status(status: str) -> bool:
     """Check if a chat member status means the user is inside the room."""
-    return status in {"creator", "administrator", "member"}
+    return status in {"creator", "administrator", "member", "restricted"}
 
 
 def _deal_room_invite_kb(invite_link: str) -> InlineKeyboardMarkup:
