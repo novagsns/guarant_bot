@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from bot.services.trade_bonus import TradeLevel
+from bot.services.trade_bonus import DEAL_MIN_AMOUNT, TradeLevel
 
 EXCHANGE_CONFIG: dict[int, tuple[Decimal, Decimal]] = {
     0: (Decimal("400"), Decimal("0.10")),
