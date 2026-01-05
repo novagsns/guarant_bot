@@ -20,7 +20,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -483,6 +483,107 @@ async def _room_has_all_participants(bot, chat_id: int, deal: Deal) -> bool:
     return True
 
 
+async def _prepare_room_for_deal(
+    bot,
+    sessionmaker: async_sessionmaker,
+    deal: Deal,
+) -> tuple[Deal | None, str | None]:
+    """Ensure the deal has room and invite_link."""
+
+    async with sessionmaker() as session:
+        db_deal = await session.get(Deal, deal.id)
+        if not db_deal:
+            return None, None
+        if not db_deal.room_chat_id:
+            result = await session.execute(
+                select(DealRoom).where(DealRoom.assigned_deal_id == db_deal.id)
+            )
+            room = result.scalar_one_or_none()
+            if room:
+                db_deal.room_chat_id = room.chat_id
+                if room.invite_link and not db_deal.room_invite_link:
+                    db_deal.room_invite_link = room.invite_link
+                await session.commit()
+
+    invite_link = None
+    if db_deal.room_chat_id:
+        async with sessionmaker() as session:
+            result = await session.execute(
+                select(DealRoom).where(DealRoom.chat_id == db_deal.room_chat_id)
+            )
+            room = result.scalar_one_or_none()
+            if room:
+                if not room.invite_link:
+                    try:
+                        invite = await bot.create_chat_invite_link(
+                            db_deal.room_chat_id,
+                            name="GSNS deal room",
+                        )
+                        room.invite_link = invite.invite_link
+                        db_deal.room_invite_link = invite.invite_link
+                        invite_link = invite.invite_link
+                        await session.commit()
+                    except Exception:
+                        pass
+                else:
+                    invite_link = room.invite_link
+    return db_deal, invite_link
+
+
+async def _find_active_deal(
+    sessionmaker: async_sessionmaker,
+    user_id: int,
+    *,
+    deal_id: int | None = None,
+) -> Deal | None:
+    """Return the latest active deal for the user or specific id."""
+
+    conditions = (
+        Deal.status.not_in({"closed", "canceled"}),
+        or_(
+            Deal.buyer_id == user_id,
+            Deal.seller_id == user_id,
+            Deal.guarantee_id == user_id,
+        ),
+    )
+    async with sessionmaker() as session:
+        query = select(Deal).where(*conditions)
+        if deal_id:
+            query = query.where(Deal.id == deal_id)
+        result = await session.execute(query.order_by(Deal.id.desc()).limit(1))
+        return result.scalar_one_or_none()
+
+
+async def _roles_summary(
+    bot,
+    deal: Deal,
+    chat_id: int | None = None,
+) -> list[str]:
+    """Build the whois summary lines with member statuses."""
+
+    lines: list[str] = []
+    for label, user_id in (
+        ("Гарант", deal.guarantee_id),
+        ("Покупатель", deal.buyer_id),
+        ("Продавец", deal.seller_id),
+    ):
+        if not user_id:
+            lines.append(f"{label}: —")
+            continue
+        if not chat_id:
+            status = "нет комнаты"
+        else:
+            try:
+                member = await bot.get_chat_member(chat_id, user_id)
+                status = member.status
+            except TelegramBadRequest:
+                status = "не в чате"
+            except Exception:
+                status = "не в чате"
+        lines.append(f"{label}: {status} ({user_id})")
+    return lines
+
+
 async def _send_deal_room_intro(
     bot,
     sessionmaker: async_sessionmaker,
@@ -562,6 +663,23 @@ async def _resolve_deal_chat(
     if not deal.guarantee_id:
         return None, None, "Ожидайте гаранта."
     return deal, role, None
+
+
+async def _resolve_active_user_deal(
+    sessionmaker: async_sessionmaker,
+    user_id: int,
+    *,
+    deal_id: int | None = None,
+) -> tuple[Deal | None, str | None, str | None]:
+    """Resolve an active deal for the user, optionally by ID."""
+
+    if deal_id:
+        return await _resolve_deal_chat(sessionmaker, deal_id, user_id)
+
+    deal = await _find_active_deal(sessionmaker, user_id)
+    if not deal:
+        return None, None, "Активных сделок нет."
+    return await _resolve_deal_chat(sessionmaker, deal.id, user_id)
 
 
 def _exchange_checklists() -> tuple[str, str, str]:
@@ -1654,27 +1772,16 @@ async def open_chat(
         await callback.answer(error)
         return
 
-    async with sessionmaker() as session:
-        result = await session.execute(select(Deal).where(Deal.id == deal_id))
-        deal = result.scalar_one_or_none()
-        if not deal:
-            await callback.answer("Сделка не найдена.")
-            return
-        if not deal.room_chat_id:
-            result = await session.execute(
-                select(DealRoom).where(DealRoom.assigned_deal_id == deal.id)
-            )
-            room = result.scalar_one_or_none()
-            if room:
-                deal.room_chat_id = room.chat_id
-                if room.invite_link and not deal.room_invite_link:
-                    deal.room_invite_link = room.invite_link
-                await session.commit()
-
-    if deal.room_invite_link and deal.room_ready:
+    deal, invite_link = await _prepare_room_for_deal(
+        callback.bot, sessionmaker, deal
+    )
+    if not deal:
+        await callback.answer("Сделка не найдена.")
+        return
+    if invite_link and deal.room_ready:
         await callback.message.answer(
-            f"Deal chat is ready:\n{deal.room_invite_link}",
-            reply_markup=_deal_room_invite_kb(deal.room_invite_link),
+            f"Deal chat is ready:\n{invite_link}",
+            reply_markup=_deal_room_invite_kb(invite_link),
         )
         if deal.room_chat_id:
             try:
@@ -1869,6 +1976,115 @@ async def deal_log(message: Message, sessionmaker: async_sessionmaker) -> None:
         return
 
     await _send_deal_window(message, deal_id=deal_id, role=role)
+
+
+@router.message(Command("chat"))
+async def chat_command(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Provide the deal room invite and trigger the room intro when ready."""
+
+    if not message.from_user:
+        return
+
+    parts = (message.text or "").split()
+    deal_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    deal, role, error = await _resolve_active_user_deal(
+        sessionmaker, message.from_user.id, deal_id=deal_id
+    )
+    if error:
+        await message.answer(error)
+        return
+
+    deal, invite_link = await _prepare_room_for_deal(
+        message.bot, sessionmaker, deal
+    )
+    if not deal:
+        await message.answer("Сделка не найдена.")
+        return
+    if not deal.room_chat_id:
+        await message.answer("Чат для сделки ещё не назначен.")
+        return
+    if not invite_link:
+        await message.answer(
+            "Не удалось получить ссылку на чат сделки. Обратитесь к администратору."
+        )
+        return
+
+    chat_id = deal.room_chat_id
+    room_ready = await _room_has_all_participants(message.bot, chat_id, deal)
+    status_text: str
+    if room_ready:
+        await _send_deal_room_intro(
+            message.bot,
+            sessionmaker,
+            deal=deal,
+            role=role,
+            chat_id=chat_id,
+        )
+        status_text = "Инструкция отправлена в комнату после того, как все участники присутствуют."
+    else:
+        status_lines = await _roles_summary(message.bot, deal, chat_id)
+        status_text = "Ждём участников:\n" + "\n".join(status_lines)
+
+    lines = [
+        f"Чат сделки #{deal.id}",
+        f"Роль: {role_label(role)}",
+        f"Ссылка: {invite_link}",
+        "",
+        status_text,
+    ]
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=_deal_room_invite_kb(invite_link),
+    )
+
+
+@router.message(Command("whois"))
+async def whois_command(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Show participant statuses and review button for the current deal."""
+
+    if not message.from_user:
+        return
+
+    parts = (message.text or "").split()
+    deal_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    deal, _, error = await _resolve_active_user_deal(
+        sessionmaker, message.from_user.id, deal_id=deal_id
+    )
+    if error:
+        await message.answer(error)
+        return
+
+    chat_id = deal.room_chat_id
+    status_lines = await _roles_summary(message.bot, deal, chat_id)
+
+    lines = [
+        f"Сделка #{deal.id} ({deal.status})",
+        f"Комната: {chat_id or 'не назначена'}",
+        f"Ссылка: {deal.room_invite_link or '—'}",
+        "",
+        *status_lines,
+    ]
+
+    markup = None
+    if deal.guarantee_id:
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="➡️ Отзывы гаранта",
+                        callback_data=f"guarantor_reviews:{deal.id}:{deal.guarantee_id}",
+                    )
+                ]
+            ]
+        )
+
+    await message.answer("\n".join(lines), reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("guarantor_reviews:"))
