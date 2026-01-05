@@ -584,14 +584,14 @@ async def tools_trade_bonus(callback: CallbackQuery) -> None:
     """Show the trade bonus announcement."""
 
     await callback.answer()
-    await callback.message.answer(TRADE_BONUS_ANNOUNCEMENT)
+    await callback.message.answer(TRADE_BONUS_ANNOUNCEMENT, parse_mode=None)
 
 
 @router.message(Command("trade_bonus"))
 async def trade_bonus_message(message: Message) -> None:
     """Handle /trade_bonus command."""
 
-    await message.answer(TRADE_BONUS_ANNOUNCEMENT)
+    await message.answer(TRADE_BONUS_ANNOUNCEMENT, parse_mode=None)
 
 
 @router.message(ToolsStates.fee_amount)
