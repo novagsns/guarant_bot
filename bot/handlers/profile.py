@@ -41,6 +41,7 @@ from bot.services.trust import (
     get_trust_score,
 )
 from bot.keyboards.ads import game_list_kb
+from bot.keyboards.common import REVIEW_MENU_BUTTON
 from bot.keyboards.profile import (
     ad_edit_kb,
     deal_detail_kb,
@@ -56,6 +57,7 @@ from bot.utils.vip import free_fee_active, is_vip_until
 router = Router()
 
 _profile_message_ids: dict[int, int] = {}
+REVIEWS_PER_PAGE = 5
 
 
 async def _cleanup_profile_message(user_id: int, bot) -> None:
@@ -77,6 +79,115 @@ async def _send_profile_view(
     msg = await sender()
     _profile_message_ids[user_id] = msg.message_id
     return msg
+
+
+def _review_nav_markup(page: int, has_more: bool) -> InlineKeyboardMarkup:
+    nav: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️", callback_data=f"profile:reviews:{page-1}"
+            )
+        )
+    nav.append(InlineKeyboardButton(text=f"{page}", callback_data="noop"))
+    if has_more:
+        nav.append(
+            InlineKeyboardButton(
+                text="▶️", callback_data=f"profile:reviews:{page+1}"
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[nav])
+
+
+async def _build_review_page(
+    sessionmaker: async_sessionmaker, page: int
+) -> tuple[str | None, InlineKeyboardMarkup | None]:
+    per_page = REVIEWS_PER_PAGE
+    limit = per_page + 1
+    offset = (page - 1) * per_page
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(Review, Deal, User)
+            .join(Deal, Deal.id == Review.deal_id)
+            .join(User, User.id == Review.author_id)
+            .where(
+                Review.status == "active",
+                Deal.guarantee_id.is_not(None),
+            )
+            .order_by(Deal.id.desc(), Review.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = result.all()
+    has_more = len(rows) > per_page
+    rows = rows[:per_page]
+    if not rows:
+        return None, None
+
+    entries: dict[int, dict[str, object]] = {}
+    for review, deal, author in rows:
+        entry = entries.setdefault(
+            deal.id,
+            {
+                "deal": deal,
+                "seller": {},
+                "buyer": {},
+            },
+        )
+        if author.id == deal.seller_id:
+            entry["seller"]["comment"] = review.comment
+            entry["seller"]["rating"] = review.rating
+        elif author.id == deal.buyer_id:
+            entry["buyer"]["comment"] = review.comment
+            entry["buyer"]["rating"] = review.rating
+        entry["guarantor_id"] = deal.guarantee_id
+    async with sessionmaker() as session:
+        guarantor_ids = {
+            entry["guarantor_id"] for entry in entries.values() if entry["guarantor_id"]
+        }
+        guarantors = {}
+        if guarantor_ids:
+            result = await session.execute(
+                select(User).where(User.id.in_(guarantor_ids))
+            )
+            guarantors = {user.id: user for user in result.scalars().all()}
+
+    texts: list[str] = []
+    sorted_items = sorted(entries.items(), key=lambda item: item[0], reverse=True)
+    for deal_id, entry in sorted_items:
+        deal: Deal = entry["deal"]
+        guarantor = guarantors.get(entry.get("guarantor_id"))
+        guarantor_label = (
+            f"@{guarantor.username}" if guarantor and guarantor.username else str(guarantor.id)
+            if guarantor
+            else "-"
+        )
+        lines = [
+            f"Гарант {guarantor_label}",
+            f"Сделка №{deal.id}",
+        ]
+        seller = entry["seller"]
+        buyer = entry["buyer"]
+        if seller.get("comment"):
+            lines.append(f"Отзыв продавца: {seller['comment']}")
+        elif seller.get("rating"):
+            lines.append(f"Оценка продавца: {seller['rating']}/5")
+        if buyer.get("comment"):
+            lines.append(f"Отзыв покупателя: {buyer['comment']}")
+        elif buyer.get("rating"):
+            lines.append(f"Оценка покупателя: {buyer['rating']}/5")
+        ratings = [
+            seller.get("rating"),
+            buyer.get("rating"),
+        ]
+        ratings = [r for r in ratings if isinstance(r, int)]
+        if ratings:
+            avg = sum(ratings) / len(ratings)
+            lines.append(f"Оценка: {avg:.1f}/5")
+        texts.append("\n".join(lines))
+
+    markup = _review_nav_markup(page, has_more)
+    return "\n\n".join(texts), markup
 
 
 class AdEditStates(StatesGroup):
@@ -512,118 +623,46 @@ async def profile_reviews(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
 ) -> None:
-    """Handle profile reviews (guarantors)."""
     parts = callback.data.split(":")
     page = 1
     if len(parts) > 2 and parts[2].isdigit():
         page = max(int(parts[2]), 1)
-    per_page = 5
-    limit = per_page + 1
-    offset = (page - 1) * per_page
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(Review, Deal, User)
-            .join(Deal, Deal.id == Review.deal_id)
-            .join(User, User.id == Review.author_id)
-            .where(
-                Review.status == "active",
-                Deal.guarantee_id.is_not(None),
-            )
-            .order_by(Deal.id.desc(), Review.id.asc())
-            .limit(limit)
-            .offset(offset)
+    text, markup = await _build_review_page(sessionmaker, page)
+    if not text:
+        await _send_profile_view(
+            callback.from_user.id,
+            callback.bot,
+            lambda: callback.message.answer("Пока нет отзывов гарантов."),
         )
-        rows = result.all()
-    has_more = len(rows) > per_page
-    rows = rows[:per_page]
-    if not rows:
-        await callback.message.answer("Пока нет отзывов гарантов.")
         await callback.answer()
         return
-    entries: dict[int, dict[str, object]] = {}
-    for review, deal, author in rows:
-        entry = entries.setdefault(
-            deal.id,
-            {
-                "deal": deal,
-                "seller": {},
-                "buyer": {},
-            },
-        )
-        if author.id == deal.seller_id:
-            entry["seller"]["comment"] = review.comment
-            entry["seller"]["rating"] = review.rating
-        elif author.id == deal.buyer_id:
-            entry["buyer"]["comment"] = review.comment
-            entry["buyer"]["rating"] = review.rating
-        entry["guarantor_id"] = deal.guarantee_id
-    async with sessionmaker() as session:
-        guarantor_ids = {
-            entry["guarantor_id"] for entry in entries.values() if entry["guarantor_id"]
-        }
-        guarantors = {}
-        if guarantor_ids:
-            result = await session.execute(
-                select(User).where(User.id.in_(guarantor_ids))
-            )
-            guarantors = {user.id: user for user in result.scalars().all()}
-
-    texts = []
-    sorted_items = sorted(entries.items(), key=lambda item: item[0], reverse=True)
-    for deal_id, entry in sorted_items:
-        deal: Deal = entry["deal"]
-        guarantor = guarantors.get(entry.get("guarantor_id"))
-        guarantor_label = (
-            f"@{guarantor.username}" if guarantor and guarantor.username else str(guarantor.id)
-            if guarantor
-            else "-"
-        )
-        lines = [
-            f"Гарант {guarantor_label}",
-            f"Сделка №{deal.id}",
-        ]
-        seller = entry["seller"]
-        buyer = entry["buyer"]
-        if seller.get("comment"):
-            lines.append(f"Отзыв продавца: {seller['comment']}")
-        elif seller.get("rating"):
-            lines.append(f"Оценка продавца: {seller['rating']}/5")
-        if buyer.get("comment"):
-            lines.append(f"Отзыв покупателя: {buyer['comment']}")
-        elif buyer.get("rating"):
-            lines.append(f"Оценка покупателя: {buyer['rating']}/5")
-        ratings = [
-            seller.get("rating"),
-            buyer.get("rating"),
-        ]
-        ratings = [r for r in ratings if isinstance(r, int)]
-        if ratings:
-            avg = sum(ratings) / len(ratings)
-            lines.append(f"Оценка: {avg:.1f}/5")
-        texts.append("\n".join(lines))
-    nav: list[InlineKeyboardButton] = []
-    if page > 1:
-        nav.append(
-            InlineKeyboardButton(
-                text="◀️",
-                callback_data=f"profile:reviews:{page-1}",
-            )
-        )
-    nav.append(InlineKeyboardButton(text=f"{page}", callback_data="noop"))
-    if has_more:
-        nav.append(
-            InlineKeyboardButton(
-                text="▶️",
-                callback_data=f"profile:reviews:{page+1}",
-            )
-        )
-    markup = InlineKeyboardMarkup(inline_keyboard=[nav]) if nav else None
     await _send_profile_view(
         callback.from_user.id,
         callback.bot,
-        lambda: callback.message.answer("\n\n".join(texts), reply_markup=markup),
+        lambda: callback.message.answer(text, reply_markup=markup),
     )
     await callback.answer()
+
+
+@router.message(F.text == REVIEW_MENU_BUTTON, F.chat.type == "private")
+async def profile_reviews_menu(
+    message: Message, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle reviews quick access from the main menu."""
+    page = 1
+    text, markup = await _build_review_page(sessionmaker, page)
+    if not text:
+        await _send_profile_view(
+            message.from_user.id,
+            message.bot,
+            lambda: message.answer("Пока нет отзывов гарантов."),
+        )
+        return
+    await _send_profile_view(
+        message.from_user.id,
+        message.bot,
+        lambda: message.answer(text, reply_markup=markup),
+    )
 
 
 @router.callback_query(F.data.startswith("wallet_tx:"))

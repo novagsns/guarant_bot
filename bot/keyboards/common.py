@@ -5,6 +5,8 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+REVIEW_MENU_BUTTON = "📝 Просмотреть отзывы"
+
 
 def main_menu_kb() -> ReplyKeyboardMarkup:
     """Handle main menu kb.
@@ -23,6 +25,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="👤 Профиль"),
             ],
             [KeyboardButton(text="ℹ️ Информация")],
+            [KeyboardButton(text=REVIEW_MENU_BUTTON)],
             [KeyboardButton(text="👑 Управление персоналом")],
         ],
         resize_keyboard=True,
