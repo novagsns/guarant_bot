@@ -2431,7 +2431,6 @@ async def deal_close_yes(
                         description=f"Сделка #{deal.id}",
                     )
                 )
-        await _release_deal_room(session, deal)
         await session.commit()
     await callback.message.answer(f"Сделка #{deal_id} закрыта.")
     review_kb = InlineKeyboardMarkup(
