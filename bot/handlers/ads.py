@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.db.models import Ad, Complaint, Game, User
+from bot.utils.vip import is_vip_until
 from bot.handlers.helpers import get_or_create_user
 from bot.services.trust import apply_trust_event
 from bot.keyboards.ads import (
@@ -356,7 +357,12 @@ async def _send_ads(
         total = total or 0
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = min(page, total_pages)
-        query = select(Ad, Game).join(Game, Game.id == Ad.game_id).where(*filters)
+        query = (
+            select(Ad, Game, User)
+            .join(Game, Game.id == Ad.game_id)
+            .join(User, User.id == Ad.seller_id)
+            .where(*filters)
+        )
         if ad_kind == "sale":
             query = query.order_by(
                 Ad.promoted_at.is_(None),
@@ -379,7 +385,7 @@ async def _send_ads(
         await message.answer(empty_text)
         return
 
-    for ad, game in rows:
+    for ad, game, seller in rows:
         if ad_kind == "exchange":
             price_line = f"💰 Доплата: {ad.price or 0} ₽\n"
             actions_kb = exchange_actions_kb(ad.id)
@@ -390,12 +396,29 @@ async def _send_ads(
         title_html = ad.title_html or escape(ad.title)
         description_html = ad.description_html or escape(ad.description)
         game_name = escape(game.name)
-        caption = (
-            f"<b>{title_html}</b>\n"
-            f"🎮 Игра: {game_name}\n"
-            f"{price_line}"
-            f"{description_html}"
-        )
+        vip_badge = is_vip_until(seller.vip_until if seller else None)
+        if vip_badge:
+            price_label = (
+                f"{ad.price:,.2f}".replace(",", " ") + " ₽"
+                if ad.price is not None
+                else "Договорная"
+            )
+            caption = (
+                f"🚗 VIP Объявление: {title_html}\n"
+                "Новое поступление от проверенного продавца!\n"
+                "Этот аккаунт прошел проверку и готов к передаче новому владельцу. "
+                "Идеальный выбор для тех, кто ценит статус и качество.\n\n"
+                "💰 Стоимость\n\n"
+                f"{price_label}\n\n"
+                "Заинтересовало предложение? Перейдите в личный кабинет для связи с продавцом или бронирования."
+            )
+        else:
+            caption = (
+                f"<b>{title_html}</b>\n"
+                f"🎮 Игра: {game_name}\n"
+                f"{price_line}"
+                f"{description_html}"
+            )
         expected_emojis = _count_custom_emoji_html(caption)
 
         if ad.media_type == "фото" and ad.media_file_id:

@@ -24,17 +24,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from bot.config import Settings
 from bot.db.models import (
     Ad,
+    BroadcastRequest,
     Complaint,
     Deal,
+    DealRoom,
     Dispute,
     Game,
-    BroadcastRequest,
     ModerationChat,
     ModerationWord,
     Review,
+    StaffTask,
     TrustEvent,
     TrustState,
-    StaffTask,
     User,
     WalletTransaction,
 )
@@ -1287,12 +1288,34 @@ async def mod_approve(
         result = await session.execute(select(User).where(User.id == ad.seller_id))
         seller = result.scalar_one_or_none()
         if seller and is_vip_until(seller.vip_until) and ad.account_id:
-            text = (
-                "Новый аккаунт от проверенного продавца\n"
-                f"{ad.title}\n"
-                f"Цена: {ad.price} ₽\n"
-                f"ID объявления: {ad.id}"
+            game_name = "-"
+            if ad.game_id:
+                game_result = await session.execute(
+                    select(Game.name).where(Game.id == ad.game_id)
+                )
+                game_row = game_result.scalar_one_or_none()
+                if game_row:
+                    game_name = game_row
+
+            seller_label = (
+                f"{seller.id} (@{seller.username})"
+                if seller.username
+                else str(seller.id)
             )
+            price_label = f"{ad.price} ₽" if ad.price is not None else "Договорная"
+            account_line = f"🆔 Аккаунт: {ad.account_id}\n" if ad.account_id else ""
+            description = (ad.description or "").strip()
+            text = (
+                "💎 VIP-объявление GSNS 💎\n"
+                f"🎮 Игра: {game_name}\n"
+                f"🔖 Название: {ad.title}\n"
+                f"💰 Цена: {price_label}\n"
+                f"👤 Продавец: {seller_label}\n"
+                f"{account_line}"
+                f"✳️ ID объявления: {ad.id}\n"
+            )
+            if description:
+                text += f"\n📜 Описание:\n{description}"
             await create_broadcast_request(
                 session,
                 callback.bot,
@@ -2661,8 +2684,19 @@ async def broadcast_approve(
         req.status = "approved"
         await session.commit()
 
+        room_result = await session.execute(select(DealRoom.chat_id))
+        room_ids = {
+            room_id
+            for room_id in room_result.scalars().all()
+            if room_id is not None
+        }
+
         result = await session.execute(select(User.id))
-        user_ids = [row[0] for row in result.all()]
+        user_ids = [
+            user_id
+            for user_id in result.scalars().all()
+            if user_id not in room_ids
+        ]
 
     await callback.answer("Рассылка запущена.")
 
