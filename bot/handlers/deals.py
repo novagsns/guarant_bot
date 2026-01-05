@@ -56,6 +56,8 @@ from bot.utils.vip import free_fee_active
 
 router = Router()
 
+_ROOM_SUMMARIES_POSTED: set[int] = set()
+
 
 class ChatStates(StatesGroup):
     """Represent ChatStates.
@@ -191,6 +193,14 @@ def _cents_to_price(value: int) -> Decimal:
         Return value.
     """
     return (Decimal(value) / Decimal("100")).quantize(Decimal("0.01"))
+
+
+def _fmt_amount(value: Decimal | None) -> str:
+    """Format currency with 2 decimals."""
+
+    if not value:
+        return "0"
+    return f"{value.quantize(Decimal('0.01'))}"
 
 
 def _deal_chat_list_kb(deals: list[Deal]) -> InlineKeyboardMarkup:
@@ -377,6 +387,7 @@ async def _release_deal_room(session, deal: Deal) -> None:
     deal.room_chat_id = None
     deal.room_invite_link = None
     deal.room_ready = False
+    _ROOM_SUMMARIES_POSTED.discard(deal.id)
 
 
 async def _mark_room_ready_and_notify(
@@ -410,6 +421,50 @@ async def _mark_room_ready_and_notify(
         text,
         reply_markup=_deal_room_invite_kb(invite_link),
     )
+
+
+async def _send_room_summary(
+    bot,
+    deal: Deal,
+    chat_id: int,
+    buyer_label: str,
+    seller_label: str,
+    guarantor_label: str,
+) -> None:
+    """Post summary about the deal once every participant has joined."""
+
+    if deal.id in _ROOM_SUMMARIES_POSTED:
+        return
+    if not deal.guarantee_id:
+        return
+
+    price = _fmt_amount(deal.price)
+    fee = _fmt_amount(deal.fee)
+    lines = [
+        f"👤 Гарант: {guarantor_label}",
+        f"👤 Покупатель: {buyer_label}",
+        f"👤 Продавец: {seller_label}",
+    ]
+    if deal.fee:
+        lines.append(
+            f"💰 Сумма сделки: {price} ₽ (аккаунт) + {fee} ₽ (гаранту)"
+        )
+    else:
+        lines.append(f"💰 Сумма сделки: {price} ₽ (аккаунт)")
+
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⭐ Отзывы гаранта",
+                    callback_data=f"guarantor_reviews:{deal.id}:{deal.guarantee_id}",
+                )
+            ]
+        ]
+    )
+
+    await bot.send_message(chat_id, "\n".join(lines), reply_markup=markup)
+    _ROOM_SUMMARIES_POSTED.add(deal.id)
 
 
 async def _room_has_all_participants(bot, chat_id: int, deal: Deal) -> bool:
@@ -450,6 +505,14 @@ async def _send_deal_room_intro(
     buyer_label = await _format_user(buyer) if buyer else "id:-"
     seller_label = await _format_user(seller) if seller else "id:-"
     guarantor_label = await _format_user(guarantor) if guarantor else "—"
+    await _send_room_summary(
+        bot,
+        deal,
+        chat_id,
+        buyer_label,
+        seller_label,
+        guarantor_label,
+    )
     lines = [
         "🤝 <b>Сделка</b>",
         f"ID: {deal.id}",
