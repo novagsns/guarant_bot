@@ -196,14 +196,39 @@ async def _notify_moderators(
 
 
 def _format_complaint_notification(
-    complaint: Complaint, ad: Ad | None, game: Game | None
+    complaint: Complaint,
+    ad: Ad | None,
+    game: Game | None,
+    reporter: User | None,
 ) -> str:
     game_line = f"🎮 Игра: {game.name}\n" if game else ""
+    if ad:
+        account_line = f"🆔 ID аккаунта: {ad.account_id}\n" if ad.account_id else ""
+        price_line = (
+            f"💰 Цена: {ad.price:.2f} ₽\n" if ad.price is not None else "💰 Цена: Договорная\n"
+        )
+        description_line = f"📜 Описание: {ad.description or '-'}\n"
+        ad_details = (
+            f"🔖 Название: {ad.title}\n"
+            f"{price_line}"
+            f"{account_line}"
+            f"{description_line}"
+        )
+    else:
+        ad_details = "🔖 Объявление не найдено\n"
+    reporter_label = (
+        f"{reporter.id} (@{reporter.username})"
+        if reporter
+        and reporter.username
+        else str(reporter.id) if reporter
+        else "Автор не найден"
+    )
     return (
         f"Жалоба #{complaint.id}\n"
+        f"Автор жалобы: {reporter_label}\n"
         f"{game_line}"
         f"Объявление: {complaint.ad_id}\n"
-        f"Автор жалобы: {complaint.reporter_id}\n"
+        f"{ad_details}"
         f"Причина: {complaint.reason or '-'}"
     )
 
@@ -1463,11 +1488,15 @@ async def complaint_reason(
         )
         session.add(complaint)
         result = await session.execute(
-            select(Ad, Game).join(Game, Game.id == Ad.game_id).where(Ad.id == ad_id)
+            select(Ad, Game, User)
+            .join(Game, Game.id == Ad.game_id)
+            .join(User, User.id == Ad.seller_id)
+            .where(Ad.id == ad_id)
         )
         row = result.first()
         ad = row[0] if row else None
         game = row[1] if row else None
+        reporter = await session.get(User, complaint.reporter_id)
         if ad:
             await apply_trust_event(
                 session,
@@ -1479,7 +1508,9 @@ async def complaint_reason(
                 ref_id=ad_id,
             )
         await session.commit()
-        notification_text = _format_complaint_notification(complaint, ad, game)
+        notification_text = _format_complaint_notification(
+            complaint, ad, game, reporter
+        )
 
     await state.clear()
     await message.answer("Жалоба отправлена модерации.")
