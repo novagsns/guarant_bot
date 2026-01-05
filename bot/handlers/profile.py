@@ -480,35 +480,84 @@ async def profile_reviews(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
 ) -> None:
-    """Handle profile reviews."""
+    """Handle profile reviews (guarantors)."""
     async with sessionmaker() as session:
         result = await session.execute(
-            select(Review, User)
+            select(Review, Deal, User)
+            .join(Deal, Deal.id == Review.deal_id)
             .join(User, User.id == Review.author_id)
             .where(
-                Review.target_id == callback.from_user.id,
                 Review.status == "active",
+                Deal.guarantee_id.is_not(None),
             )
-            .order_by(Review.created_at.desc())
-            .limit(10)
+            .order_by(Deal.id.desc(), Review.id.asc())
+            .limit(40)
         )
         rows = result.all()
     if not rows:
-        await callback.message.answer("Пока нет активных отзывов.")
+        await callback.message.answer("Пока нет отзывов гарантов.")
         await callback.answer()
         return
+    entries: dict[int, dict[str, object]] = {}
+    for review, deal, author in rows:
+        entry = entries.setdefault(
+            deal.id,
+            {
+                "deal": deal,
+                "seller": {},
+                "buyer": {},
+            },
+        )
+        if author.id == deal.seller_id:
+            entry["seller"]["comment"] = review.comment
+            entry["seller"]["rating"] = review.rating
+        elif author.id == deal.buyer_id:
+            entry["buyer"]["comment"] = review.comment
+            entry["buyer"]["rating"] = review.rating
+        entry["guarantor_id"] = deal.guarantee_id
+    async with sessionmaker() as session:
+        guarantor_ids = {
+            entry["guarantor_id"] for entry in entries.values() if entry["guarantor_id"]
+        }
+        guarantors = {}
+        if guarantor_ids:
+            result = await session.execute(
+                select(User).where(User.id.in_(guarantor_ids))
+            )
+            guarantors = {user.id: user for user in result.scalars().all()}
+
     texts = []
-    for review, author in rows:
-        author_label = (
-            f"@{author.username}" if author.username else str(author.id)
+    for deal_id, entry in sorted(entries.items(), reverse=True):
+        deal: Deal = entry["deal"]
+        guarantor = guarantors.get(entry.get("guarantor_id"))
+        guarantor_label = (
+            f"@{guarantor.username}" if guarantor and guarantor.username else str(guarantor.id)
+            if guarantor
+            else "-"
         )
-        comment = review.comment or "без комментария"
-        created = review.created_at.strftime("%Y-%m-%d") if review.created_at else "-"
-        texts.append(
-            f"Отзыв #{review.id} — {review.rating}/5\n"
-            f"{comment}\n"
-            f"от {author_label} — {created}"
-        )
+        lines = [
+            f"Гарант {guarantor_label}",
+            f"Сделка №{deal.id}",
+        ]
+        seller = entry["seller"]
+        buyer = entry["buyer"]
+        if seller.get("comment"):
+            lines.append(f"Отзыв продавца: {seller['comment']}")
+        elif seller.get("rating"):
+            lines.append(f"Оценка продавца: {seller['rating']}/5")
+        if buyer.get("comment"):
+            lines.append(f"Отзыв покупателя: {buyer['comment']}")
+        elif buyer.get("rating"):
+            lines.append(f"Оценка покупателя: {buyer['rating']}/5")
+        ratings = [
+            seller.get("rating"),
+            buyer.get("rating"),
+        ]
+        ratings = [r for r in ratings if isinstance(r, int)]
+        if ratings:
+            avg = sum(ratings) / len(ratings)
+            lines.append(f"Оценка: {avg:.1f}/5")
+        texts.append("\n".join(lines))
     await callback.message.answer("\n\n".join(texts))
     await callback.answer()
 
