@@ -1297,21 +1297,17 @@ async def mod_approve(
                 if game_row:
                     game_name = game_row
 
-            seller_label = (
-                f"{seller.id} (@{seller.username})"
-                if seller.username
-                else str(seller.id)
+            seller_label = f"@{seller.username}" if seller.username else "Продавец без ника"
+            price_label = (
+                f"{ad.price:.2f} ₽" if ad.price is not None else "Договорная"
             )
-            price_label = f"{ad.price} ₽" if ad.price is not None else "Договорная"
-            account_line = f"🆔 Аккаунт: {ad.account_id}\n" if ad.account_id else ""
             description = (ad.description or "").strip()
             text = (
                 "💎 VIP-объявление GSNS 💎\n"
                 f"🎮 Игра: {game_name}\n"
                 f"🔖 Название: {ad.title}\n"
                 f"💰 Цена: {price_label}\n"
-                f"👤 Продавец: {seller_label}\n"
-                f"{account_line}"
+                f"👤 Продавец: {seller_label}\n\n"
                 f"✳️ ID объявления: {ad.id}\n"
             )
             if description:
@@ -2700,6 +2696,7 @@ async def broadcast_approve(
 
     await callback.answer("Рассылка запущена.")
 
+
     async def _run_broadcast() -> None:
         sent = 0
         failed = 0
@@ -2713,28 +2710,6 @@ async def broadcast_approve(
         await callback.message.answer(
             f"Рассылка одобрена. Отправлено: {sent}. " f"Ошибки: {failed}."
         )
-        async with sessionmaker() as session:
-            result = await session.execute(
-                select(ModerationChat).where(ModerationChat.active.is_(True))
-            )
-            mod_chats = result.scalars().all()
-
-        if mod_chats:
-            pretty = (
-                "\U0001f4e3 <b>\u0420\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0430</b>\n"
-                f"ID: {request_id}\n"
-                f"\u0422\u0438\u043f: {req_kind}\n"
-                f"\u0410\u0432\u0442\u043e\u0440: {req_creator}\n"
-                f"\u041e\u0445\u0432\u0430\u0442: {sent}\n"
-                f"\u041e\u0448\u0438\u0431\u043a\u0438: {failed}\n\n"
-                f"{req_text}"
-            )
-            for chat in mod_chats:
-                try:
-                    await callback.bot.send_message(chat.chat_id, pretty)
-                except Exception:
-                    continue
-
     asyncio.create_task(_run_broadcast())
 
 
