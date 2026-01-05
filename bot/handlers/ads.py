@@ -22,10 +22,9 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from bot.config import Settings
 from bot.db.models import Ad, Complaint, Game, User
-from bot.utils.vip import is_vip_until
 from bot.handlers.helpers import get_or_create_user
-from bot.services.trust import apply_trust_event
 from bot.keyboards.ads import (
     ad_actions_kb,
     account_filter_kb,
@@ -34,7 +33,10 @@ from bot.keyboards.ads import (
     my_ad_kb,
 )
 from bot.keyboards.common import deals_menu_kb, exchange_menu_kb
+from bot.services.trust import apply_trust_event
+from bot.utils.admin_target import get_admin_target
 from bot.utils.scammers import find_scammer
+from bot.utils.vip import is_vip_until
 
 router = Router()
 
@@ -191,6 +193,19 @@ async def _notify_moderators(
                     actual=actual_emojis,
                     chat_id=mod.id,
                 )
+
+
+def _format_complaint_notification(
+    complaint: Complaint, ad: Ad | None, game: Game | None
+) -> str:
+    game_line = f"🎮 Игра: {game.name}\n" if game else ""
+    return (
+        f"Жалоба #{complaint.id}\n"
+        f"{game_line}"
+        f"Объявление: {complaint.ad_id}\n"
+        f"Автор жалобы: {complaint.reporter_id}\n"
+        f"Причина: {complaint.reason or '-'}"
+    )
 
 
 def _is_cancel(text: str | None) -> bool:
@@ -1424,6 +1439,7 @@ async def complaint_reason(
     message: Message,
     state: FSMContext,
     sessionmaker: async_sessionmaker,
+    settings: Settings,
 ) -> None:
     """Handle complaint reason.
 
@@ -1446,8 +1462,12 @@ async def complaint_reason(
             reason=(message.text or "").strip(),
         )
         session.add(complaint)
-        result = await session.execute(select(Ad).where(Ad.id == ad_id))
-        ad = result.scalar_one_or_none()
+        result = await session.execute(
+            select(Ad, Game).join(Game, Game.id == Ad.game_id).where(Ad.id == ad_id)
+        )
+        row = result.first()
+        ad = row[0] if row else None
+        game = row[1] if row else None
         if ad:
             await apply_trust_event(
                 session,
@@ -1459,6 +1479,15 @@ async def complaint_reason(
                 ref_id=ad_id,
             )
         await session.commit()
+        notification_text = _format_complaint_notification(complaint, ad, game)
 
     await state.clear()
     await message.answer("Жалоба отправлена модерации.")
+
+    chat_id, topic_id = get_admin_target(settings)
+    if chat_id:
+        await message.bot.send_message(
+            chat_id,
+            notification_text,
+            message_thread_id=topic_id,
+        )
