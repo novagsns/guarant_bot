@@ -57,6 +57,7 @@ from bot.utils.vip import free_fee_active
 router = Router()
 
 _ROOM_SUMMARIES_POSTED: set[int] = set()
+_ROOM_GUARANTOR_CONTROLS_POSTED: set[int] = set()
 
 
 class ChatStates(StatesGroup):
@@ -388,6 +389,7 @@ async def _release_deal_room(session, deal: Deal) -> None:
     deal.room_invite_link = None
     deal.room_ready = False
     _ROOM_SUMMARIES_POSTED.discard(deal.id)
+    _ROOM_GUARANTOR_CONTROLS_POSTED.discard(deal.id)
 
 
 async def _mark_room_ready_and_notify(
@@ -465,6 +467,20 @@ async def _send_room_summary(
 
     await bot.send_message(chat_id, "\n".join(lines), reply_markup=markup)
     _ROOM_SUMMARIES_POSTED.add(deal.id)
+
+
+async def _send_guarantor_controls(bot, deal: Deal, chat_id: int) -> None:
+    """Send a guarantor-only control panel once per deal."""
+
+    if not deal.guarantee_id or deal.id in _ROOM_GUARANTOR_CONTROLS_POSTED:
+        return
+
+    await bot.send_message(
+        chat_id,
+        "Гарант, используйте кнопки ниже для завершения или отмены сделки.",
+        reply_markup=deal_room_guarantor_kb(deal.id),
+    )
+    _ROOM_GUARANTOR_CONTROLS_POSTED.add(deal.id)
 
 
 async def _room_has_all_participants(bot, chat_id: int, deal: Deal) -> bool:
@@ -635,6 +651,9 @@ async def _send_deal_room_intro(
         reply_markup=markup,
         parse_mode="HTML",
     )
+
+    if role != "guarantor":
+        await _send_guarantor_controls(bot, deal, chat_id)
 
 
 async def _resolve_deal_chat(
