@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _is_active_until(until: datetime | None) -> bool:
+    if not until:
+        return False
+    if until.tzinfo is None or until.tzinfo.utcoffset(until) is None:
+        return until >= datetime.utcnow()
+    return until >= datetime.now(timezone.utc)
 
 
 def is_vip_until(vip_until: datetime | None) -> bool:
@@ -14,9 +22,7 @@ def is_vip_until(vip_until: datetime | None) -> bool:
     Returns:
         Return value.
     """
-    if not vip_until:
-        return False
-    return vip_until >= datetime.utcnow()
+    return _is_active_until(vip_until)
 
 
 def free_fee_active(free_fee_until: datetime | None) -> bool:
@@ -28,6 +34,4 @@ def free_fee_active(free_fee_until: datetime | None) -> bool:
     Returns:
         Return value.
     """
-    if not free_fee_until:
-        return False
-    return free_fee_until >= datetime.utcnow()
+    return _is_active_until(free_fee_until)

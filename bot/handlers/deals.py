@@ -539,7 +539,7 @@ async def start_deal(
         row = result.first()
         if not row:
             await callback.answer("Объявление не найдено.")
-        return
+            return
 
         ad, game, seller = row
         trust_score = await get_trust_score(session, seller.id)
