@@ -99,24 +99,30 @@ def tools_menu_kb() -> InlineKeyboardMarkup:
                     callback_data="scammers_public:check",
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    text="\U0001f9fe \u0411\u0430\u0437\u0430 \u0441\u043a\u0430\u043c\u0435\u0440\u043e\u0432",
-                    callback_data="info:scammers",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="\U0001f194 \u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442",
-                    callback_data="tools:account_check",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="\U0001f4b0 \u041a\u0430\u043b\u044c\u043a\u0443\u043b\u044f\u0442\u043e\u0440 \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u0438",
-                    callback_data="tools:fee",
-                )
-            ],
+        [
+            InlineKeyboardButton(
+                text="\U0001f9fe \u0411\u0430\u0437\u0430 \u0441\u043a\u0430\u043c\u0435\u0440\u043e\u0432",
+                callback_data="info:scammers",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="\U0001f194 \u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442",
+                callback_data="tools:account_check",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="\U0001f48e \u0411\u043e\u043d\u0443\u0441\u044b \u0442\u043e\u0440\u0433\u043e\u0432\u043b\u0438",
+                callback_data="tools:trade_bonus",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="\U0001f4b0 \u041a\u0430\u043b\u044c\u043a\u0443\u043b\u044f\u0442\u043e\u0440 \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u0438",
+                callback_data="tools:fee",
+            )
+        ],
             [
                 InlineKeyboardButton(
                     text="\U0001f4cc \u041c\u043e\u0438 \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f",

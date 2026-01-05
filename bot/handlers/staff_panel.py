@@ -67,6 +67,7 @@ from bot.keyboards.staff import (
 )
 from bot.keyboards.chat_moderation import chat_moderation_kb
 from bot.services.fees import calculate_fee
+from bot.services.trade_bonus import get_trade_level
 from bot.services.daily_report import send_daily_report
 from bot.services.trust import (
     apply_trust_event,
@@ -2958,7 +2959,16 @@ async def create_deal_manual(
                 return
 
         trust_score = await get_trust_score(session, seller_user.id)
-        fee = calculate_fee(price, deal_type, addon_amount, trust_score=trust_score)
+        trade_level = await get_trade_level(session, seller_user.id)
+        vip_seller = is_vip_until(seller_user.vip_until)
+        fee = calculate_fee(
+            price,
+            deal_type,
+            addon_amount,
+            trust_score=trust_score,
+            trade_level=trade_level,
+            vip=vip_seller,
+        )
         if free_fee_active(seller_user.free_fee_until):
             fee = Decimal("0")
         deal = Deal(

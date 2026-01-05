@@ -48,11 +48,12 @@ from bot.keyboards.ads import (
 from bot.keyboards.staff import confirm_action_kb
 from bot.services.anon_chat import role_label
 from bot.services.fees import calculate_fee
+from bot.services.trade_bonus import get_trade_level
 from bot.services.trust import get_trust_score, apply_trust_event
 from bot.utils.admin_target import get_admin_target
 from bot.utils.moderation import contains_prohibited
 from bot.utils.roles import is_owner, is_staff
-from bot.utils.vip import free_fee_active
+from bot.utils.vip import free_fee_active, is_vip_until
 
 router = Router()
 
@@ -783,6 +784,7 @@ async def start_deal(
 
         ad, game, seller = row
         trust_score = await get_trust_score(session, seller.id)
+        trade_level = await get_trade_level(session, seller.id)
         if seller.id == buyer.id:
             await callback.answer("Нельзя открыть сделку со своим объявлением.")
             return
@@ -822,7 +824,14 @@ async def start_deal(
             return
 
         deal_type = "buy"
-        fee = calculate_fee(ad.price, deal_type, trust_score=trust_score)
+        vip_seller = is_vip_until(seller.vip_until)
+        fee = calculate_fee(
+            ad.price,
+            deal_type,
+            trust_score=trust_score,
+            trade_level=trade_level,
+            vip=vip_seller,
+        )
         if free_fee_active(seller.free_fee_until):
             fee = Decimal("0")
         deal = Deal(
@@ -1133,6 +1142,7 @@ async def buy_confirm(
             return
         ad, game, ad_seller = row
         trust_score = await get_trust_score(session, seller.id)
+        trade_level = await get_trade_level(session, seller.id)
         if ad_seller.id != seller.id:
             await callback.answer("Нет доступа.")
             return
@@ -1142,7 +1152,14 @@ async def buy_confirm(
             await callback.answer("Покупатель не найден.")
             return
 
-        fee = calculate_fee(price, "buy", trust_score=trust_score)
+        vip_seller = is_vip_until(seller.vip_until)
+        fee = calculate_fee(
+            price,
+            "buy",
+            trust_score=trust_score,
+            trade_level=trade_level,
+            vip=vip_seller,
+        )
         if free_fee_active(seller.free_fee_until):
             fee = Decimal("0")
         deal = Deal(
@@ -1265,7 +1282,14 @@ async def buy_change_price(
             await message.answer("Покупатель не найден.")
             return
 
-        fee = calculate_fee(price, "buy", trust_score=trust_score)
+        vip_seller = is_vip_until(seller.vip_until)
+        fee = calculate_fee(
+            price,
+            "buy",
+            trust_score=trust_score,
+            trade_level=trade_level,
+            vip=vip_seller,
+        )
         if free_fee_active(seller.free_fee_until):
             fee = Decimal("0")
         deal = Deal(
@@ -1390,9 +1414,15 @@ async def exchange_description(
             await message.answer("Нельзя открыть сделку со своим объявлением.")
             return
 
+        vip_seller = is_vip_until(seller.vip_until)
         deal_type = "exchange_with_addon" if addon_amount > 0 else "exchange"
         fee = calculate_fee(
-            addon_amount, deal_type, addon_amount, trust_score=trust_score
+            addon_amount,
+            deal_type,
+            addon_amount,
+            trust_score=trust_score,
+            trade_level=trade_level,
+            vip=vip_seller,
         )
         if free_fee_active(seller.free_fee_until):
             fee = Decimal("0")

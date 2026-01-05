@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -30,12 +30,54 @@ from bot.keyboards.common import (
 )
 from bot.services.fees import calculate_fee
 from bot.services.trust import apply_trust_event, get_trust_score
+from bot.services.trade_bonus import get_trade_level
 from bot.services.weekly_rewards import grant_pending_rewards
 from bot.utils.roles import is_owner
 from bot.utils.scammers import find_scammer
 from bot.utils.texts import TOOLS_TEXT, WELCOME_TEXT
 
 router = Router()
+
+
+TRADE_BONUS_ANNOUNCEMENT = (
+    "📣 GSNS — ОБНОВЛЕНИЕ ДЛЯ ПЕРЕКУПОВ / ТРЕЙДЕРОВ\n\n"
+    "Запускаем бонусную систему по количеству сделок.\n\n"
+    "⚠️ ВАЖНО:\n"
+    "• считаются только сделки, проведённые через бота GSNS Trade ✅\n"
+    "• в зачёт идут сделки на сумму от 2500 ₽ ✅\n\n"
+    "────────────────────\n"
+    "📌 БАЗОВЫЕ УСЛОВИЯ GSNS\n\n"
+    "К/П (купля / продажа):\n"
+    "• < 2000 ₽ → 250 ₽\n"
+    "• 2000–24999 ₽ → 12%\n"
+    "• ≥ 25000 ₽ → 10%\n\n"
+    "Обмен:\n"
+    "• обмен → 400 ₽\n"
+    "• обмен с доплатой → 400 ₽ + 10% от доплаты\n\n"
+    "Рассрочка:\n"
+    "• 14%\n"
+    "────────────────────\n"
+    "🎁 БОНУСЫ ПО УРОВНЯМ (для перекупов/трейдеров)\n\n"
+    "🥉 УРОВЕНЬ 1 — 18+ сделок\n"
+    "• К/П: 10%\n"
+    "• обмен: 350 ₽\n"
+    "• обмен с доплатой: 350 ₽ + 8% от доплаты\n"
+    "🏷 Префикс: «GSNS Trader»\n\n"
+    "🥈 УРОВЕНЬ 2 — 25+ сделок\n"
+    "• К/П: 9%\n"
+    "• обмен: 300 ₽\n"
+    "• обмен с доплатой: 300 ₽ + 7% от доплаты\n"
+    "• рассрочка: 13%\n"
+    "🏷 Префикс: «GSNS PRO»\n\n"
+    "📌 С префиксом «GSNS PRO» скидка действует и для покупателя,\n"
+    "если у покупателя тоже есть префикс «GSNS PRO».\n\n"
+    "🥇 УРОВЕНЬ 3 — 40+ сделок\n"
+    "• К/П: 8%\n"
+    "• обмен: 250 ₽\n"
+    "• обмен с доплатой: 250 ₽ + 5% от доплаты\n"
+    "• рассрочка: 11%\n"
+    "🏷 Префикс: «GSNS ELITE»"
+)
 
 
 class ToolsStates(StatesGroup):
@@ -537,6 +579,21 @@ async def tools_fee_type(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "tools:trade_bonus")
+async def tools_trade_bonus(callback: CallbackQuery) -> None:
+    """Show the trade bonus announcement."""
+
+    await callback.answer()
+    await callback.message.answer(TRADE_BONUS_ANNOUNCEMENT)
+
+
+@router.message(Command("trade_bonus"))
+async def trade_bonus_message(message: Message) -> None:
+    """Handle /trade_bonus command."""
+
+    await message.answer(TRADE_BONUS_ANNOUNCEMENT)
+
+
 @router.message(ToolsStates.fee_amount)
 async def tools_fee_amount(
     message: Message,
@@ -560,7 +617,13 @@ async def tools_fee_amount(
     fee_type = data.get("fee_type", "sale")
     async with sessionmaker() as session:
         trust_score = await get_trust_score(session, message.from_user.id)
-    fee = calculate_fee(raw_amount, fee_type, trust_score=trust_score)
+        trade_level = await get_trade_level(session, message.from_user.id)
+    fee = calculate_fee(
+        raw_amount,
+        fee_type,
+        trust_score=trust_score,
+        trade_level=trade_level,
+    )
     await state.clear()
     if fee is None:
         await message.answer(
@@ -573,7 +636,11 @@ async def tools_fee_amount(
 
 
 @router.message(ToolsStates.fee_addon)
-async def tools_fee_addon(message: Message, state: FSMContext) -> None:
+async def tools_fee_addon(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+) -> None:
     """Handle tools fee addon.
 
     Args:
@@ -586,7 +653,14 @@ async def tools_fee_addon(message: Message, state: FSMContext) -> None:
             "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043e\u043f\u043b\u0430\u0442\u044b."
         )
         return
-    fee = calculate_fee("0", "exchange_with_addon", addon_amount=raw_amount)
+    async with sessionmaker() as session:
+        trade_level = await get_trade_level(session, message.from_user.id)
+    fee = calculate_fee(
+        "0",
+        "exchange_with_addon",
+        addon_amount=raw_amount,
+        trade_level=trade_level,
+    )
     await state.clear()
     if fee is None:
         await message.answer(
