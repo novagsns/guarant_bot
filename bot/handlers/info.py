@@ -131,12 +131,7 @@ async def info_staff(callback: CallbackQuery, sessionmaker: async_sessionmaker) 
         if user.role in grouped:
             grouped[user.role].append(user)
 
-    lines = [
-        "👥 <b>Команда GSNS</b>",
-        "—",
-        "👑 <b>Основатель</b>",
-        "• @nsim_GSNS",
-    ]
+    lines = ["👥 <b>Команда GSNS</b>"]
     for role in role_order:
         members = grouped.get(role) or []
         if not members:

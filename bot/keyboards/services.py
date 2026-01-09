@@ -81,6 +81,60 @@ def service_buy_kb(service_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def confirm_action_kb(
+    *,
+    confirm_data: str,
+    cancel_data: str,
+    confirm_text: str,
+    cancel_text: str = "Отмена",
+) -> InlineKeyboardMarkup:
+    """Render a confirm/cancel keyboard."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=confirm_text, callback_data=confirm_data),
+                InlineKeyboardButton(text=cancel_text, callback_data=cancel_data),
+            ]
+        ]
+    )
+
+
+def service_buy_confirm_kb(service_id: int) -> InlineKeyboardMarkup:
+    """Handle service buy confirm kb."""
+    return confirm_action_kb(
+        confirm_data=f"service_buy_confirm:{service_id}",
+        cancel_data=f"service_buy_cancel:{service_id}",
+        confirm_text="Да, купить",
+    )
+
+
+def service_delete_confirm_kb(service_id: int) -> InlineKeyboardMarkup:
+    """Handle service delete confirm kb."""
+    return confirm_action_kb(
+        confirm_data=f"service_delete_confirm:{service_id}",
+        cancel_data=f"service_delete_cancel:{service_id}",
+        confirm_text="Да, удалить",
+    )
+
+
+def roulette_confirm_kb() -> InlineKeyboardMarkup:
+    """Handle roulette confirm kb."""
+    return confirm_action_kb(
+        confirm_data="roulette:confirm",
+        cancel_data="roulette:cancel",
+        confirm_text="Да, крутить",
+    )
+
+
+def topup_start_confirm_kb() -> InlineKeyboardMarkup:
+    """Handle topup start confirm kb."""
+    return confirm_action_kb(
+        confirm_data="topup:start_confirm",
+        cancel_data="topup:start_cancel",
+        confirm_text="Да, продолжить",
+    )
+
+
 def my_service_kb(service_id: int) -> InlineKeyboardMarkup:
     """Handle my service kb.
 

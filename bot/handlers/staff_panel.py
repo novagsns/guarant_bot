@@ -90,7 +90,7 @@ router = Router()
 async def _send_broadcast_message(bot, user_id: int, text: str) -> bool:
     """Handle send broadcast message."""
     try:
-        await bot.send_message(user_id, text)
+        await bot.send_message(user_id, text, parse_mode=None)
         return True
     except (TelegramForbiddenError, TelegramBadRequest):
         return False
@@ -2773,7 +2773,7 @@ async def broadcast_reject(
     await callback.answer()
 
 
-@router.message(F.text.startswith("/broadcast "))
+@router.message(F.text.startswith("/broadcast"))
 async def staff_broadcast(
     message: Message,
     sessionmaker: async_sessionmaker,
@@ -2792,10 +2792,12 @@ async def staff_broadcast(
             sender.role, settings.owner_ids, sender.id
         ):
             return
-        text = message.text.split(" ", 1)[1].strip()
-        if not text:
+        raw_text = (message.text or "").strip()
+        parts = raw_text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
             await message.answer("Формат: /broadcast текст")
             return
+        text = parts[1].strip()
         await create_broadcast_request(
             session,
             message.bot,

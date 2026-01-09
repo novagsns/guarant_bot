@@ -300,7 +300,9 @@ async def mod_chat_add(message: Message, sessionmaker: async_sessionmaker) -> No
     """Добавляет текущий чат в модерацию."""
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
+    if not message.from_user or not await _has_moderation_rights(
+        message.bot, sessionmaker, message.chat.id, message.from_user.id
+    ):
         await message.answer("Нет доступа.")
         return
     await _upsert_moderation_chat(
@@ -422,8 +424,14 @@ async def cmd_unban(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
+        await message.answer(
+            "Чат не в списке модерации. Используйте /mod_chat_add."
+        )
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
+    if not message.from_user or not await _has_moderation_rights(
+        message.bot, sessionmaker, message.chat.id, message.from_user.id
+    ):
+        await message.answer("Нет доступа.")
         return
 
     parts = (message.text or "").split()
@@ -461,8 +469,14 @@ async def cmd_mute(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
+        await message.answer(
+            "Чат не в списке модерации. Используйте /mod_chat_add."
+        )
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
+    if not message.from_user or not await _has_moderation_rights(
+        message.bot, sessionmaker, message.chat.id, message.from_user.id
+    ):
+        await message.answer("Нет доступа.")
         return
 
     parts = (message.text or "").split()
@@ -567,8 +581,14 @@ async def cmd_unmute(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
+        await message.answer(
+            "Чат не в списке модерации. Используйте /mod_chat_add."
+        )
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
+    if not message.from_user or not await _has_moderation_rights(
+        message.bot, sessionmaker, message.chat.id, message.from_user.id
+    ):
+        await message.answer("Нет доступа.")
         return
 
     parts = (message.text or "").split()
@@ -618,9 +638,13 @@ async def cmd_warn(
     if message.chat.type not in {"group", "supergroup"}:
         return
     if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer("Чат не в списке модерации. " "Используйте /mod_chat_add.")
+        await message.answer(
+            "Чат не в списке модерации. Используйте /mod_chat_add."
+        )
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
+    if not message.from_user or not await _has_moderation_rights(
+        message.bot, sessionmaker, message.chat.id, message.from_user.id
+    ):
         await message.answer("Нет доступа.")
         return
 
@@ -870,6 +894,22 @@ async def _is_staff(sessionmaker: async_sessionmaker, user_id: int) -> bool:
         if not user:
             return False
         return user.role in {"owner", "admin", "moderator", "guarantor"}
+
+
+async def _has_moderation_rights(
+    bot,
+    sessionmaker: async_sessionmaker,
+    chat_id: int,
+    user_id: int,
+) -> bool:
+    """Return whether the user can run moderation commands in the chat."""
+    if await _is_staff(sessionmaker, user_id):
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    return member.status in {"administrator", "creator"}
 
 
 async def _is_moderated_chat(sessionmaker: async_sessionmaker, chat_id: int) -> bool:

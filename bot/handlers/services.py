@@ -26,14 +26,18 @@ from bot.handlers.helpers import get_or_create_user
 from bot.keyboards.common import referral_kb
 from bot.keyboards.services import (
     my_service_kb,
+    roulette_confirm_kb,
     roulette_result_kb,
     service_buy_kb,
+    service_buy_confirm_kb,
     service_chat_kb,
+    service_delete_confirm_kb,
     service_list_kb,
     services_menu_kb,
     topup_confirm_kb,
     topup_reject_reason_kb,
     topup_review_kb,
+    topup_start_confirm_kb,
 )
 from bot.utils.admin_target import get_admin_target
 from bot.utils.moderation import contains_prohibited
@@ -165,18 +169,47 @@ async def _animate_roulette(message: Message) -> None:
 
 
 @router.callback_query(F.data == "roulette:start")
+async def roulette_start_confirm(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Ask for roulette confirmation before charging the user."""
+    cost = ROULETTE_SPIN_COST
+    async with sessionmaker() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        if (user.balance or 0) < cost:
+            await callback.message.answer("Недостаточно GSNS Coins.")
+            await callback.answer()
+            return
+    if callback.message:
+        await callback.message.answer(
+            "Подтвердите запуск рулетки:", reply_markup=roulette_confirm_kb()
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "roulette:confirm")
 async def roulette_start(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
     settings: Settings,
 ) -> None:
-    """Handle roulette start.
+    """Handle roulette start."""
+    await _run_roulette(callback, sessionmaker, settings)
 
-    Args:
-        callback: Value for callback.
-        sessionmaker: Value for sessionmaker.
-        settings: Value for settings.
-    """
+
+@router.callback_query(F.data == "roulette:cancel")
+async def roulette_cancel(callback: CallbackQuery) -> None:
+    """Handle roulette cancel."""
+    await callback.answer("Отменено")
+
+
+async def _run_roulette(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Run the roulette spin."""
     cost = ROULETTE_SPIN_COST
     async with sessionmaker() as session:
         user = await get_or_create_user(session, callback.from_user)
@@ -693,12 +726,36 @@ async def service_buy(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
 ) -> None:
-    """Handle service buy.
+    """Ask for confirmation before buying a service.
 
     Args:
         callback: Value for callback.
         sessionmaker: Value for sessionmaker.
     """
+    service_id = int(callback.data.split(":")[1])
+    async with sessionmaker() as session:
+        buyer = await get_or_create_user(session, callback.from_user)
+        result = await session.execute(select(Service).where(Service.id == service_id))
+        service = result.scalar_one_or_none()
+        if not service or not service.active:
+            await callback.answer("Услуга недоступна.")
+            return
+        if (buyer.balance or 0) < service.price:
+            await callback.answer("Недостаточно GSNS Coins.")
+            return
+        await callback.message.answer(
+            f"Подтвердите покупку услуги «{service.title}» за {service.price} GSNS Coins:",
+            reply_markup=service_buy_confirm_kb(service.id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("service_buy_confirm:"))
+async def service_buy_confirm(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle service buy after confirmation."""
     service_id = int(callback.data.split(":")[1])
     async with sessionmaker() as session:
         buyer = await get_or_create_user(session, callback.from_user)
@@ -756,6 +813,12 @@ async def service_buy(
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("service_buy_cancel:"))
+async def service_buy_cancel(callback: CallbackQuery) -> None:
+    """Handle service buy cancel."""
+    await callback.answer("Отменено")
+
+
 async def _show_my_services(
     callback: CallbackQuery, sessionmaker: async_sessionmaker
 ) -> None:
@@ -792,7 +855,7 @@ async def _show_my_services(
 async def service_delete(
     callback: CallbackQuery, sessionmaker: async_sessionmaker
 ) -> None:
-    """Handle service delete.
+    """Ask for confirmation before deleting a service.
 
     Args:
         callback: Value for callback.
@@ -805,10 +868,35 @@ async def service_delete(
         if not service or service.creator_id != callback.from_user.id:
             await callback.answer("Нет доступа.")
             return
+        await callback.message.answer(
+            f"Удалить услугу «{service.title}»?",
+            reply_markup=service_delete_confirm_kb(service.id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("service_delete_confirm:"))
+async def service_delete_confirm(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle service delete after confirmation."""
+    service_id = int(callback.data.split(":")[1])
+    async with sessionmaker() as session:
+        result = await session.execute(select(Service).where(Service.id == service_id))
+        service = result.scalar_one_or_none()
+        if not service or service.creator_id != callback.from_user.id:
+            await callback.answer("Нет доступа.")
+            return
         await session.delete(service)
         await session.commit()
     await callback.message.answer("Услуга удалена.")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("service_delete_cancel:"))
+async def service_delete_cancel(callback: CallbackQuery) -> None:
+    """Handle service delete cancel."""
+    await callback.answer("Отменено")
 
 
 @router.callback_query(F.data.startswith("service_edit:"))
@@ -964,16 +1052,35 @@ async def service_edit_value(
 
 
 @router.callback_query(F.data == "topup:start")
+async def topup_start_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    """Ask for confirmation before starting topup flow."""
+    await state.clear()
+    await callback.message.answer(
+        "Подтвердите пополнение GSNS Coins:",
+        reply_markup=topup_start_confirm_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "topup:start_confirm")
 async def topup_start(
     callback: CallbackQuery, state: FSMContext, settings: Settings
 ) -> None:
-    """Handle topup start.
+    """Handle topup start."""
+    await _begin_topup(callback, state, settings)
 
-    Args:
-        callback: Value for callback.
-        state: Value for state.
-        settings: Value for settings.
-    """
+
+@router.callback_query(F.data == "topup:start_cancel")
+async def topup_start_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle topup cancel."""
+    await state.clear()
+    await callback.answer("Отменено")
+
+
+async def _begin_topup(
+    callback: CallbackQuery, state: FSMContext, settings: Settings
+) -> None:
+    """Start the topup flow after confirmation."""
     await state.clear()
     await state.set_state(TopUpStates.amount)
     wallet = settings.wallet_trc20 or "не настроено"

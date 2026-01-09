@@ -59,5 +59,6 @@ async def create_broadcast_request(
             ),
             message_thread_id=topic_id,
             reply_markup=broadcast_request_kb(request.id),
+            parse_mode=None,
         )
     return request
