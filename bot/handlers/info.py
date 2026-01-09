@@ -136,7 +136,6 @@ async def info_staff(callback: CallbackQuery, sessionmaker: async_sessionmaker) 
         "—",
         "👑 <b>Основатель</b>",
         "• @nsim_GSNS",
-        "—",
     ]
     for role in role_order:
         members = grouped.get(role) or []

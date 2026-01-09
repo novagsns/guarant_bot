@@ -7,10 +7,10 @@ from decimal import Decimal
 from bot.services.trade_bonus import DEAL_MIN_AMOUNT, TradeLevel
 
 EXCHANGE_CONFIG: dict[int, tuple[Decimal, Decimal]] = {
-    0: (Decimal("400"), Decimal("0.08")),
-    1: (Decimal("370"), Decimal("0.07")),
-    2: (Decimal("340"), Decimal("0.06")),
-    3: (Decimal("300"), Decimal("0.05")),
+    0: (Decimal("400"), Decimal("0.10")),
+    1: (Decimal("370"), Decimal("0.09")),
+    2: (Decimal("340"), Decimal("0.09")),
+    3: (Decimal("300"), Decimal("0.07")),
 }
 
 INSTALLMENT_RATES: dict[int, Decimal] = {
