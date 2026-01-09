@@ -1340,6 +1340,7 @@ async def buy_change_price(
             return
         ad, game, ad_seller = row
         trust_score = await get_trust_score(session, seller.id)
+        trade_level = await get_trade_level(session, seller.id)
         if ad_seller.id != seller.id:
             await state.clear()
             await message.answer("Нет доступа.")
@@ -1478,6 +1479,7 @@ async def exchange_description(
             return
         ad, game, seller = row
         trust_score = await get_trust_score(session, seller.id)
+        trade_level = await get_trade_level(session, seller.id)
         if seller.id == buyer.id:
             await state.clear()
             await message.answer("Нельзя открыть сделку со своим объявлением.")
@@ -1726,6 +1728,7 @@ async def deal_room_add(
 async def deal_rooms_free(
     message: Message,
     sessionmaker: async_sessionmaker,
+    settings: Settings,
 ) -> None:
     """List free deal rooms."""
     if message.chat.type not in {"group", "supergroup"}:
@@ -1765,6 +1768,7 @@ async def deal_rooms_free(
 async def deal_room_status(
     message: Message,
     sessionmaker: async_sessionmaker,
+    settings: Settings,
 ) -> None:
     """Show room status for a deal."""
     if message.chat.type not in {"group", "supergroup"}:
