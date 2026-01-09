@@ -12,9 +12,9 @@ from bot.db.models import Deal
 DEAL_MIN_AMOUNT = Decimal("2500")
 
 LEVEL_DEFINITIONS = (
-    (3, 40, "GSNS ELITE"),
-    (2, 25, "GSNS PRO"),
-    (1, 18, "GSNS Trader"),
+    (3, 25, "GSNS ELITE"),
+    (2, 15, "GSNS PRO"),
+    (1, 10, "GSNS Trader"),
 )
 
 

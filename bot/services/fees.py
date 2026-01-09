@@ -7,22 +7,18 @@ from decimal import Decimal
 from bot.services.trade_bonus import DEAL_MIN_AMOUNT, TradeLevel
 
 EXCHANGE_CONFIG: dict[int, tuple[Decimal, Decimal]] = {
-    0: (Decimal("400"), Decimal("0.10")),
-    1: (Decimal("350"), Decimal("0.08")),
-    2: (Decimal("300"), Decimal("0.07")),
-    3: (Decimal("250"), Decimal("0.05")),
+    0: (Decimal("400"), Decimal("0.08")),
+    1: (Decimal("370"), Decimal("0.07")),
+    2: (Decimal("340"), Decimal("0.06")),
+    3: (Decimal("300"), Decimal("0.05")),
 }
-VIP_EXCHANGE_BASE = Decimal("350")
-VIP_EXCHANGE_ADDON_RATE = Decimal("0.09")
 
 INSTALLMENT_RATES: dict[int, Decimal] = {
-    0: Decimal("0.14"),
-    1: Decimal("0.14"),
-    2: Decimal("0.13"),
-    3: Decimal("0.11"),
+    0: Decimal("0.12"),
+    1: Decimal("0.12"),
+    2: Decimal("0.11"),
+    3: Decimal("0.10"),
 }
-VIP_INSTALLMENT_RATE = Decimal("0.13")
-VIP_COMMISSION_DISCOUNT = Decimal("0.01")
 
 
 def _to_decimal(value: float | int | str) -> Decimal:
@@ -51,20 +47,17 @@ def calculate_fee(
     vip_installment = vip and amount_dec >= DEAL_MIN_AMOUNT
 
     if deal_type == "exchange":
-        if vip:
-            return VIP_EXCHANGE_BASE
-        base_fee, _ = EXCHANGE_CONFIG.get(level, EXCHANGE_CONFIG[0])
+        idx = level if vip else 0
+        base_fee, _ = EXCHANGE_CONFIG.get(idx, EXCHANGE_CONFIG[0])
         return base_fee
     if deal_type == "exchange_with_addon":
         addon_dec = _to_decimal(addon_amount or 0)
-        if vip:
-            return VIP_EXCHANGE_BASE + addon_dec * VIP_EXCHANGE_ADDON_RATE
-        base_fee, addon_rate = EXCHANGE_CONFIG.get(level, EXCHANGE_CONFIG[0])
+        idx = level if vip else 0
+        base_fee, addon_rate = EXCHANGE_CONFIG.get(idx, EXCHANGE_CONFIG[0])
         return base_fee + addon_dec * addon_rate
     if deal_type == "installment":
-        rate = VIP_INSTALLMENT_RATE if vip_installment else INSTALLMENT_RATES.get(
-            level, INSTALLMENT_RATES[0]
-        )
+        rate_key = level if vip_installment else 0
+        rate = INSTALLMENT_RATES.get(rate_key, INSTALLMENT_RATES[0])
         rate = max(rate - _trust_discount(trust_score), Decimal("0"))
         return amount_dec * rate
     if deal_type in {"contact", "chat"}:
@@ -79,22 +72,16 @@ def _calculate_buy_fee(
     """Calculate commission for buy/sale deals."""
 
     if amount < Decimal("2000"):
-        return Decimal("250")
+        return Decimal("200")
 
-    if level >= 3:
+    if amount >= Decimal("25000"):
         base_rate = Decimal("0.08")
-    elif level == 2:
-        base_rate = Decimal("0.09")
-    elif level == 1:
-        base_rate = Decimal("0.10")
-    elif amount < Decimal("25000"):
-        base_rate = Decimal("0.12")
     else:
         base_rate = Decimal("0.10")
 
-    if vip:
-        base_rate = max(base_rate - VIP_COMMISSION_DISCOUNT, Decimal("0"))
-    rate = max(base_rate - _trust_discount(trust_score), Decimal("0"))
+    vip_discount = Decimal(level) * Decimal("0.01") if vip else Decimal("0")
+    rate = max(base_rate - vip_discount, Decimal("0.06"))
+    rate = max(rate - _trust_discount(trust_score), Decimal("0.06"))
     return amount * rate
 
 
