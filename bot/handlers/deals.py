@@ -754,7 +754,7 @@ async def start_deal(
     settings: Settings,
     state: FSMContext,
 ) -> None:
-    """Handle start deal.
+    """Handle start deal confirmation.
 
     Args:
         callback: Value for callback.
@@ -764,7 +764,43 @@ async def start_deal(
     """
     action, raw_id = callback.data.split(":")
     ad_id = int(raw_id)
+    prompt = {
+        "buy": "Подтвердить создание сделки?",
+        "contact": "Открыть диалог с продавцом?",
+        "exchange": "Начать обмен по объявлению?",
+    }.get(action, "Подтвердить действие?")
+    await callback.message.answer(
+        prompt, reply_markup=_confirm_start_deal_kb(action, ad_id)
+    )
+    await callback.answer()
 
+
+def _confirm_start_deal_kb(action: str, ad_id: int) -> InlineKeyboardMarkup:
+    """Build a confirmation keyboard for starting deal actions."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да", callback_data=f"start_deal_yes:{action}:{ad_id}"
+                ),
+                InlineKeyboardButton(
+                    text="Нет", callback_data=f"start_deal_no:{action}:{ad_id}"
+                ),
+            ]
+        ]
+    )
+
+
+async def _start_deal_action(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+    state: FSMContext,
+    *,
+    action: str,
+    ad_id: int,
+) -> None:
+    """Handle start deal action after confirmation."""
     async with sessionmaker() as session:
         buyer = await get_or_create_user(session, callback.from_user)
         result = await session.execute(
@@ -865,6 +901,39 @@ async def start_deal(
         f"🧾 Поступила заявка на сделку #{deal.id}. Ожидайте гаранта.",
     )
     await callback.answer("✅ Заявка отправлена.")
+
+
+@router.callback_query(F.data.startswith("start_deal_yes:"))
+async def start_deal_confirm_yes(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    """Handle start deal confirmation yes.
+
+    Args:
+        callback: Value for callback.
+        sessionmaker: Value for sessionmaker.
+        settings: Value for settings.
+        state: Value for state.
+    """
+    _, action, raw_id = callback.data.split(":")
+    ad_id = int(raw_id)
+    await _start_deal_action(
+        callback, sessionmaker, settings, state, action=action, ad_id=ad_id
+    )
+
+
+@router.callback_query(F.data.startswith("start_deal_no:"))
+async def start_deal_confirm_no(callback: CallbackQuery) -> None:
+    """Handle start deal confirmation no.
+
+    Args:
+        callback: Value for callback.
+    """
+    await callback.message.answer("❌ Действие отменено.")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("prechat_open:"))
@@ -2215,22 +2284,43 @@ async def deal_data_start(
         sessionmaker: Value for sessionmaker.
     """
     deal_id = int(callback.data.split(":")[1])
-    async with sessionmaker() as session:
-        result = await session.execute(select(Deal).where(Deal.id == deal_id))
-        deal = result.scalar_one_or_none()
-        if not deal or not deal.guarantee_id:
-            await callback.answer("Сделка не найдена.")
-            return
-        if deal.status in {"closed", "canceled"}:
-            await callback.answer("Сделка завершена или отменена.")
-            return
-        if callback.from_user.id not in {deal.buyer_id, deal.seller_id}:
-            await callback.answer("Нет доступа.")
-            return
+    await callback.message.answer(
+        f"Передать данные гаранту по сделке #{deal_id}? Подтвердите действие.",
+        reply_markup=confirm_action_kb("deal_data", deal_id),
+    )
+    await callback.answer()
 
+
+@router.callback_query(F.data.startswith("deal_data_yes:"))
+async def deal_data_confirm_yes(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle deal data confirmation yes.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+        sessionmaker: Value for sessionmaker.
+    """
+    deal_id = int(callback.data.split(":")[1])
+    if not await _ensure_deal_send_access(callback, sessionmaker, deal_id):
+        return
     await state.set_state(DealSendStates.data)
     await state.update_data(deal_id=deal_id)
     await callback.message.answer("🔐 Отправьте данные гаранту.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("deal_data_no:"))
+async def deal_data_confirm_no(callback: CallbackQuery) -> None:
+    """Handle deal data confirmation no.
+
+    Args:
+        callback: Value for callback.
+    """
+    await callback.message.answer("❌ Действие отменено.")
     await callback.answer()
 
 
@@ -2248,23 +2338,65 @@ async def deal_payment_start(
         sessionmaker: Value for sessionmaker.
     """
     deal_id = int(callback.data.split(":")[1])
+    await callback.message.answer(
+        f"Передать информацию об оплате гаранту по сделке #{deal_id}? Подтвердите действие.",
+        reply_markup=confirm_action_kb("deal_payment", deal_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("deal_payment_yes:"))
+async def deal_payment_confirm_yes(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Handle deal payment confirmation yes.
+
+    Args:
+        callback: Value for callback.
+        state: Value for state.
+        sessionmaker: Value for sessionmaker.
+    """
+    deal_id = int(callback.data.split(":")[1])
+    if not await _ensure_deal_send_access(callback, sessionmaker, deal_id):
+        return
+    await state.set_state(DealSendStates.payment)
+    await state.update_data(deal_id=deal_id)
+    await callback.message.answer("💸 Отправьте информацию об оплате гаранту.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("deal_payment_no:"))
+async def deal_payment_confirm_no(callback: CallbackQuery) -> None:
+    """Handle deal payment confirmation no.
+
+    Args:
+        callback: Value for callback.
+    """
+    await callback.message.answer("❌ Действие отменено.")
+    await callback.answer()
+
+
+async def _ensure_deal_send_access(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    deal_id: int,
+) -> bool:
+    """Validate access for sending deal data/payment."""
     async with sessionmaker() as session:
         result = await session.execute(select(Deal).where(Deal.id == deal_id))
         deal = result.scalar_one_or_none()
         if not deal or not deal.guarantee_id:
             await callback.answer("Сделка не найдена.")
-            return
+            return False
         if deal.status in {"closed", "canceled"}:
             await callback.answer("Сделка завершена или отменена.")
-            return
+            return False
         if callback.from_user.id not in {deal.buyer_id, deal.seller_id}:
             await callback.answer("Нет доступа.")
-            return
-
-    await state.set_state(DealSendStates.payment)
-    await state.update_data(deal_id=deal_id)
-    await callback.message.answer("💸 Отправьте информацию об оплате гаранту.")
-    await callback.answer()
+            return False
+    return True
 
 
 @router.message(DealSendStates.data)
@@ -2593,13 +2725,13 @@ async def _relay_deal_message(
     """Relay a message inside a deal chat."""
     if not message.text:
         if not (message.photo or message.video):
-            await message.answer("????? ?????????? ?????? ?????, ???? ??? ?????.")
+            await message.answer("Поддерживаются только текст, фото или видео.")
             return
 
     check_text = message.text or message.caption or ""
     if check_text and contains_prohibited(check_text):
         await message.answer(
-            "? ???????? ? ?????? ?????????. ??????????? ??? ?????? GSNS."
+            "⛔ Контакты и ссылки запрещены. Используйте чат внутри GSNS."
         )
         async with sessionmaker() as session:
             await apply_trust_event(
@@ -2607,7 +2739,7 @@ async def _relay_deal_message(
                 message.from_user.id,
                 "guarantee_bypass",
                 -7,
-                "??????? ?????? ???????",
+                "Обход гаранта",
                 ref_type="deal_chat",
                 ref_id=message.from_user.id,
                 allow_duplicate=True,

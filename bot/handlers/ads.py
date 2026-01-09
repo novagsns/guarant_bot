@@ -33,6 +33,7 @@ from bot.keyboards.ads import (
     my_ad_kb,
 )
 from bot.keyboards.common import deals_menu_kb, exchange_menu_kb
+from bot.keyboards.staff import confirm_action_kb
 from bot.services.trust import apply_trust_event
 from bot.utils.admin_target import get_admin_target
 from bot.utils.scammers import find_scammer
@@ -1087,18 +1088,35 @@ async def activate_ad(
         sessionmaker: Value for sessionmaker.
     """
     ad_id = int(callback.data.split(":")[1])
-    async with sessionmaker() as session:
-        result = await session.execute(select(Ad).where(Ad.id == ad_id))
-        ad = result.scalar_one_or_none()
-        if not ad or ad.seller_id != callback.from_user.id:
-            await callback.answer("Нет доступа.")
-            return
-        if ad.moderation_status != "approved":
-            await callback.answer("⏳ Дождитесь модерации.")
-            return
-        ad.active = True
-        await session.commit()
-    await callback.message.answer("✅ Объявление опубликовано.")
+    await callback.message.answer(
+        "Опубликовать объявление?",
+        reply_markup=confirm_action_kb("ad_activate", ad_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ad_activate_yes:"))
+async def activate_ad_yes(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle activate ad confirmation yes.
+
+    Args:
+        callback: Value for callback.
+        sessionmaker: Value for sessionmaker.
+    """
+    ad_id = int(callback.data.split(":")[1])
+    await _set_ad_active(callback, sessionmaker, ad_id, active=True)
+
+
+@router.callback_query(F.data.startswith("ad_activate_no:"))
+async def activate_ad_no(callback: CallbackQuery) -> None:
+    """Handle activate ad confirmation no.
+
+    Args:
+        callback: Value for callback.
+    """
+    await callback.message.answer("❌ Действие отменено.")
     await callback.answer()
 
 
@@ -1113,15 +1131,61 @@ async def deactivate_ad(
         sessionmaker: Value for sessionmaker.
     """
     ad_id = int(callback.data.split(":")[1])
+    await callback.message.answer(
+        "Снять объявление с публикации?",
+        reply_markup=confirm_action_kb("ad_deactivate", ad_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ad_deactivate_yes:"))
+async def deactivate_ad_yes(
+    callback: CallbackQuery, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle deactivate ad confirmation yes.
+
+    Args:
+        callback: Value for callback.
+        sessionmaker: Value for sessionmaker.
+    """
+    ad_id = int(callback.data.split(":")[1])
+    await _set_ad_active(callback, sessionmaker, ad_id, active=False)
+
+
+@router.callback_query(F.data.startswith("ad_deactivate_no:"))
+async def deactivate_ad_no(callback: CallbackQuery) -> None:
+    """Handle deactivate ad confirmation no.
+
+    Args:
+        callback: Value for callback.
+    """
+    await callback.message.answer("❌ Действие отменено.")
+    await callback.answer()
+
+
+async def _set_ad_active(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    ad_id: int,
+    *,
+    active: bool,
+) -> None:
+    """Apply activation status for an ad."""
     async with sessionmaker() as session:
         result = await session.execute(select(Ad).where(Ad.id == ad_id))
         ad = result.scalar_one_or_none()
         if not ad or ad.seller_id != callback.from_user.id:
             await callback.answer("Нет доступа.")
             return
-        ad.active = False
+        if active and ad.moderation_status != "approved":
+            await callback.answer("⏳ Дождитесь модерации.")
+            return
+        ad.active = active
         await session.commit()
-    await callback.message.answer("✅ Объявление снято с публикации.")
+    message = (
+        "✅ Объявление опубликовано." if active else "✅ Объявление снято с публикации."
+    )
+    await callback.message.answer(message)
     await callback.answer()
 
 
@@ -1201,7 +1265,7 @@ async def exchange_offer_game(
             else:
                 await session.refresh(game)
         if not game:
-            await message.answer("?? ??????? ???????? ????. ?????????? ?????.")
+            await message.answer("Не удалось создать игру. Попробуйте позже.")
             return
 
     await state.update_data(game_id=game.id, game_name=game.name)
