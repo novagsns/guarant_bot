@@ -28,6 +28,7 @@ from bot.handlers import (
     start,
     support,
 )
+from bot.handlers.moderation import commands as moderation_commands
 from bot.middlewares import ActionLogMiddleware, AccessMiddleware, ContextMiddleware
 from bot.services.daily_report import daily_report_loop
 from bot.services.vip_jobs import vip_promotion_loop
@@ -94,6 +95,7 @@ async def main() -> None:
     dp.include_router(start.router)
     dp.include_router(admin_docs.router)
     dp.include_router(chat_moderation.router)
+    dp.include_router(moderation_commands.router)
     dp.include_router(ads.router)
     dp.include_router(deals.router)
     dp.include_router(info.router)
