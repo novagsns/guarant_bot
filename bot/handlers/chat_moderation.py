@@ -7,6 +7,7 @@ import asyncio
 import html
 import json
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
@@ -21,7 +22,7 @@ from aiogram.types import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from bot.config import Settings
+from bot.config import Settings, load_settings
 from bot.db.models import (
     ModerationCase,
     ModerationChat,
@@ -38,6 +39,7 @@ from bot.db.models import (
 from bot.keyboards.common import referral_kb
 from bot.utils.admin_target import get_admin_target
 from bot.utils.moderation import contains_blacklist
+from bot.utils.roles import is_owner, is_staff as is_staff_role
 from bot.utils.texts import CHAT_WELCOME_TEXT
 from bot.services.trust import apply_trust_event
 
@@ -64,15 +66,13 @@ def _parse_target_and_reason(
             return message.reply_to_message.from_user.id, reason or "-"
     if not args:
         return None, ""
-    raw_id = args[0]
+    raw_id = args[0].strip()
     reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
+    if not raw_id:
+        return None, ""
     if raw_id.lstrip("@").isdigit():
         return int(raw_id.lstrip("@")), reason or "-"
-    if raw_id.startswith("@"):
-        return raw_id, reason or "-"
-    return None, ""
-    reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
-    return int(raw_id), reason or "-"
+    return raw_id, reason or "-"
 
 
 def _parse_duration(value: str) -> timedelta | None:
@@ -295,6 +295,223 @@ async def _log_member_event(
         await session.commit()
 
 
+@lru_cache(maxsize=1)
+def _cached_settings() -> Settings:
+    return load_settings()
+
+
+async def _is_staff(sessionmaker: async_sessionmaker, user_id: int) -> bool:
+    async with sessionmaker() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+    if not user:
+        return False
+    role = user.role or "user"
+    settings = _cached_settings()
+    return is_staff_role(role) or is_owner(role, settings.owner_ids, user.id)
+
+
+async def _is_moderated_chat(
+    sessionmaker: async_sessionmaker, chat_id: int
+) -> bool:
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationChat.id).where(
+                ModerationChat.chat_id == chat_id,
+                ModerationChat.active.is_(True),
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def _get_moderated_chat_ids(
+    sessionmaker: async_sessionmaker,
+) -> list[int]:
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationChat.chat_id)
+            .where(ModerationChat.active.is_(True))
+            .order_by(ModerationChat.id.asc())
+        )
+        return [row[0] for row in result.all() if row and row[0]]
+
+
+async def _has_moderation_rights(
+    bot,
+    sessionmaker: async_sessionmaker,
+    chat_id: int,
+    user_id: int,
+) -> bool:
+    if await _is_staff(sessionmaker, user_id):
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    status = getattr(member, "status", None)
+    if status == "creator":
+        return True
+    if status == "administrator":
+        return bool(getattr(member, "can_restrict_members", False))
+    return False
+
+
+async def _log_info(bot, settings: Settings, text: str) -> None:
+    chat_id, topic_id = get_admin_target(settings)
+    if not chat_id:
+        return
+    await bot.send_message(chat_id, text, message_thread_id=topic_id)
+
+
+async def _load_blacklist(
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> list[str]:
+    system_words = [word for word in settings.moderation_blacklist if word.strip()]
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationWord.word).where(ModerationWord.active.is_(True))
+        )
+        custom_words = [row[0] for row in result.all() if row[0]]
+    return list(dict.fromkeys(system_words + custom_words))
+
+
+async def _forward_to_admin(bot, settings: Settings, message: Message) -> None:
+    chat_id, topic_id = get_admin_target(settings)
+    if not chat_id:
+        return
+    try:
+        await bot.forward_message(
+            chat_id,
+            message.chat.id,
+            message.message_id,
+            message_thread_id=topic_id,
+        )
+    except Exception:
+        pass
+
+
+async def _create_case(
+    sessionmaker: async_sessionmaker,
+    *,
+    kind: str,
+    chat_id: int,
+    user_id: int | None,
+    payload: str | None,
+    prev_role: str | None = None,
+) -> int:
+    async with sessionmaker() as session:
+        record = ModerationCase(
+            kind=kind,
+            chat_id=chat_id,
+            user_id=user_id,
+            payload=payload,
+            prev_role=prev_role,
+            status="pending",
+        )
+        session.add(record)
+        await session.commit()
+        await session.refresh(record)
+        return record.id
+
+
+def _case_actions_kb(case_id: int, kind: str) -> InlineKeyboardMarkup:
+    if kind == "word":
+        ban_label = "🚫 Оставить бан"
+        allow_label = "✅ Снять бан"
+    else:
+        ban_label = "🚫 Запретить"
+        allow_label = "✅ Разрешить"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ban_label,
+                    callback_data=f"mod_case_ok:{case_id}",
+                ),
+                InlineKeyboardButton(
+                    text=allow_label,
+                    callback_data=f"mod_case_cancel:{case_id}",
+                ),
+            ]
+        ]
+    )
+
+
+async def _log_case(
+    bot,
+    settings: Settings,
+    text: str,
+    case_id: int,
+    kind: str,
+) -> None:
+    chat_id, topic_id = get_admin_target(settings)
+    if not chat_id:
+        return
+    await bot.send_message(
+        chat_id,
+        text,
+        message_thread_id=topic_id,
+        reply_markup=_case_actions_kb(case_id, kind),
+        parse_mode="HTML",
+    )
+
+
+async def _get_sticker_pack_record(
+    sessionmaker: async_sessionmaker,
+    set_name: str,
+) -> ModerationStickerPack | None:
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationStickerPack).where(
+                ModerationStickerPack.set_name == set_name
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def _get_custom_emoji_pack_records(
+    sessionmaker: async_sessionmaker,
+    set_names: list[str],
+) -> dict[str, ModerationCustomEmojiPack]:
+    if not set_names:
+        return {}
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationCustomEmojiPack).where(
+                ModerationCustomEmojiPack.set_name.in_(set_names)
+            )
+        )
+        records = result.scalars().all()
+    return {record.set_name: record for record in records if record.set_name}
+
+
+async def _get_custom_emoji_records(
+    sessionmaker: async_sessionmaker,
+    emoji_ids: list[str],
+) -> dict[str, ModerationCustomEmoji]:
+    if not emoji_ids:
+        return {}
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationCustomEmoji).where(
+                ModerationCustomEmoji.emoji_id.in_(emoji_ids)
+            )
+        )
+        records = result.scalars().all()
+    return {record.emoji_id: record for record in records if record.emoji_id}
+
+
+def _parse_payload(payload: str | None) -> dict:
+    if not payload:
+        return {}
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 @router.message(F.text == "/mod_chat_add")
 async def mod_chat_add(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Добавляет текущий чат в модерацию."""
@@ -344,70 +561,118 @@ async def cmd_ban(
     """
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer("Чат не в списке модерации. Используйте /mod_chat_add.")
+    if not message.from_user:
         return
-    if not message.from_user or not await _is_staff(sessionmaker, message.from_user.id):
-        await message.answer("Нет доступа.")
-        return
+
+    is_staff = await _is_staff(sessionmaker, message.from_user.id)
+    if not is_staff:
+        if not await _is_moderated_chat(sessionmaker, message.chat.id):
+            await message.answer(
+                "Чат не в списке модерации. Используйте /mod_chat_add."
+            )
+            return
+        if not await _has_moderation_rights(
+            message.bot, sessionmaker, message.chat.id, message.from_user.id
+        ):
+            await message.answer("Нет доступа.")
+            return
 
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /ban <user_id> [причина] или ответом на сообщение."
+            "Формат: /ban <user_id/@username> [причина] или ответом на сообщение."
         )
         return
-    try:
-        await message.bot.ban_chat_member(message.chat.id, target_id)
-    except Exception:
+
+    chat_ids = await _get_moderated_chat_ids(sessionmaker)
+    if not chat_ids:
+        await message.answer("Нет активных чатов модерации.")
+        return
+    multi_chat = len(chat_ids) > 1
+
+    success_ids: list[int] = []
+    failed_ids: list[int] = []
+    for chat_id in chat_ids:
+        try:
+            await message.bot.ban_chat_member(chat_id, target_id)
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await message.bot.ban_chat_member(chat_id, target_id)
+            except Exception:
+                failed_ids.append(chat_id)
+                continue
+        except Exception:
+            failed_ids.append(chat_id)
+            continue
+        success_ids.append(chat_id)
+
+    if not success_ids:
         await message.answer("Не удалось забанить пользователя.")
         return
+
+    reason_text = _normalize_reason(reason)
+    applied_trust = False
     async with sessionmaker() as session:
-        record, created = await _upsert_restriction(
-            session,
-            chat_id=message.chat.id,
-            user_id=target_id,
-            action="ban",
-            reason=reason,
-            created_by=message.from_user.id,
-        )
-        if created:
-            await apply_trust_event(
+        for chat_id in success_ids:
+            record, created = await _upsert_restriction(
                 session,
-                target_id,
-                "chat_ban",
-                -20,
-                record.reason or "Бан в чате",
-                ref_type="restriction",
-                ref_id=record.id,
+                chat_id=chat_id,
+                user_id=target_id,
+                action="ban",
+                reason=reason,
+                created_by=message.from_user.id,
             )
-    reason_text = record.reason or _normalize_reason(reason)
-    chat_title = message.chat.title or "-"
+            if created and not applied_trust:
+                await apply_trust_event(
+                    session,
+                    target_id,
+                    "chat_ban",
+                    -20,
+                    record.reason or "Бан в чате",
+                    ref_type="restriction",
+                    ref_id=record.id,
+                )
+                applied_trust = True
+
+    chat_label = (
+        f"Все модерируемые чаты ({len(chat_ids)})"
+        if multi_chat
+        else f"{message.chat.title or '-'} ({message.chat.id})"
+    )
     mod_label = _format_tg_user(message.from_user)
     target_label = (
         _format_tg_user(message.reply_to_message.from_user)
-        if message.reply_to_message
+        if message.reply_to_message and message.reply_to_message.from_user
         else str(target_id)
     )
     log_text = (
         "⛔ Модерация\n"
         "Действие: бан\n"
-        f"Чат: {chat_title} ({message.chat.id})\n"
+        f"Чаты: {chat_label}\n"
         f"Модератор: {mod_label}\n"
         f"Пользователь: {target_label}\n"
         f"Причина: {reason_text}"
     )
+    if failed_ids:
+        log_text += f"\nОшибки: {len(failed_ids)}"
     await _log_info(message.bot, settings, log_text)
     try:
-        await message.bot.send_message(
-            target_id,
-            f"Вы забанены в чате {chat_title}. Причина: {reason_text}",
-        )
+        if len(success_ids) > 1:
+            dm_text = f"Вы забанены в чатах модерации. Причина: {reason_text}"
+        else:
+            chat_title = message.chat.title or "-"
+            dm_text = f"Вы забанены в чате {chat_title}. Причина: {reason_text}"
+        await message.bot.send_message(target_id, dm_text)
     except Exception:
         pass
-    await message.answer(f"Пользователь забанен. Причина: {reason_text}")
+
+    summary = f"Пользователь забанен. Успешно: {len(success_ids)}"
+    if failed_ids:
+        summary += f", ошибки: {len(failed_ids)}."
+    await message.answer(summary)
 
 
 @router.message(F.text.startswith("/unban"))
@@ -423,36 +688,70 @@ async def cmd_unban(
     """
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. Используйте /mod_chat_add."
-        )
+    if not message.from_user:
         return
-    if not message.from_user or not await _has_moderation_rights(
-        message.bot, sessionmaker, message.chat.id, message.from_user.id
-    ):
-        await message.answer("Нет доступа.")
-        return
+
+    is_staff = await _is_staff(sessionmaker, message.from_user.id)
+    if not is_staff:
+        if not await _is_moderated_chat(sessionmaker, message.chat.id):
+            await message.answer(
+                "Чат не в списке модерации. Используйте /mod_chat_add."
+            )
+            return
+        if not await _has_moderation_rights(
+            message.bot, sessionmaker, message.chat.id, message.from_user.id
+        ):
+            await message.answer("Нет доступа.")
+            return
 
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
-        await message.answer("Формат: /unban <user_id> или ответом на сообщение.")
+        await message.answer(
+            "Формат: /unban <user_id/@username> или ответом на сообщение."
+        )
         return
-    try:
-        await message.bot.unban_chat_member(message.chat.id, target_id)
-    except Exception:
+
+    chat_ids = await _get_moderated_chat_ids(sessionmaker)
+    if not chat_ids:
+        await message.answer("Нет активных чатов модерации.")
+        return
+
+    success_ids: list[int] = []
+    failed_ids: list[int] = []
+    for chat_id in chat_ids:
+        try:
+            await message.bot.unban_chat_member(chat_id, target_id)
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await message.bot.unban_chat_member(chat_id, target_id)
+            except Exception:
+                failed_ids.append(chat_id)
+                continue
+        except Exception:
+            failed_ids.append(chat_id)
+            continue
+        success_ids.append(chat_id)
+
+    if not success_ids:
         await message.answer("Не удалось разбанить пользователя.")
         return
+
     async with sessionmaker() as session:
-        await _deactivate_restriction(
-            session,
-            chat_id=message.chat.id,
-            user_id=target_id,
-            action="ban",
-        )
-    await message.answer("Пользователь разбанен.")
+        for chat_id in success_ids:
+            await _deactivate_restriction(
+                session,
+                chat_id=chat_id,
+                user_id=target_id,
+                action="ban",
+            )
+
+    summary = f"Пользователь разбанен. Успешно: {len(success_ids)}"
+    if failed_ids:
+        summary += f", ошибки: {len(failed_ids)}."
+    await message.answer(summary)
 
 
 @router.message(F.text.startswith("/mute"))
@@ -468,35 +767,49 @@ async def cmd_mute(
     """
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. Используйте /mod_chat_add."
-        )
-        return
-    if not message.from_user or not await _has_moderation_rights(
-        message.bot, sessionmaker, message.chat.id, message.from_user.id
-    ):
-        await message.answer("Нет доступа.")
+    if not message.from_user:
         return
 
+    is_staff = await _is_staff(sessionmaker, message.from_user.id)
+    if not is_staff:
+        if not await _is_moderated_chat(sessionmaker, message.chat.id):
+            await message.answer(
+                "Чат не в списке модерации. Используйте /mod_chat_add."
+            )
+            return
+        if not await _has_moderation_rights(
+            message.bot, sessionmaker, message.chat.id, message.from_user.id
+        ):
+            await message.answer("Нет доступа.")
+            return
+
     parts = (message.text or "").split()
+    duration_token = ""
+    reason = "-"
+    target_identifier: int | str | None = None
     if message.reply_to_message and message.reply_to_message.from_user:
         duration_token = parts[1] if len(parts) > 1 else ""
         reason = " ".join(parts[2:]).strip() if len(parts) > 2 else "-"
-        target_id = message.reply_to_message.from_user.id
+        if message.reply_to_message.forward_from:
+            target_identifier = message.reply_to_message.forward_from.id
+        else:
+            target_identifier = message.reply_to_message.from_user.id
     else:
         if len(parts) < 3:
             await message.answer(
-                "Формат: /mute <user_id> <1h/2d> [причина] или ответом на сообщение."
+                "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на сообщение."
             )
             return
-        target_raw = parts[1].lstrip("@")
-        if not target_raw.isdigit():
-            await message.answer("Укажите корректный user_id.")
-            return
-        target_id = int(target_raw)
+        target_identifier = parts[1]
         duration_token = parts[2]
         reason = " ".join(parts[3:]).strip() if len(parts) > 3 else "-"
+
+    target_id = await _resolve_user_identifier(message.bot, target_identifier)
+    if not target_id:
+        await message.answer(
+            "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на сообщение."
+        )
+        return
 
     duration = _parse_duration(duration_token)
     if not duration:
@@ -504,42 +817,78 @@ async def cmd_mute(
         return
     until_date = datetime.now(timezone.utc) + duration
     permissions = ChatPermissions(can_send_messages=False)
-    try:
-        await message.bot.restrict_chat_member(
-            message.chat.id,
-            target_id,
-            permissions=permissions,
-            until_date=until_date,
-        )
-    except Exception:
+
+    chat_ids = await _get_moderated_chat_ids(sessionmaker)
+    if not chat_ids:
+        await message.answer("Нет активных чатов модерации.")
+        return
+    multi_chat = len(chat_ids) > 1
+
+    success_ids: list[int] = []
+    failed_ids: list[int] = []
+    for chat_id in chat_ids:
+        try:
+            await message.bot.restrict_chat_member(
+                chat_id,
+                target_id,
+                permissions=permissions,
+                until_date=until_date,
+            )
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await message.bot.restrict_chat_member(
+                    chat_id,
+                    target_id,
+                    permissions=permissions,
+                    until_date=until_date,
+                )
+            except Exception:
+                failed_ids.append(chat_id)
+                continue
+        except Exception:
+            failed_ids.append(chat_id)
+            continue
+        success_ids.append(chat_id)
+
+    if not success_ids:
         await message.answer("Не удалось замутить пользователя.")
         return
+
+    reason_text = _normalize_reason(reason)
+    applied_trust = False
     async with sessionmaker() as session:
-        record, created = await _upsert_restriction(
-            session,
-            chat_id=message.chat.id,
-            user_id=target_id,
-            action="mute",
-            reason=reason,
-            until_date=until_date,
-            created_by=message.from_user.id,
-        )
-        if created:
-            await apply_trust_event(
+        for chat_id in success_ids:
+            record, created = await _upsert_restriction(
                 session,
-                target_id,
-                "chat_mute",
-                -5,
-                record.reason or "Мут в чате",
-                ref_type="restriction",
-                ref_id=record.id,
+                chat_id=chat_id,
+                user_id=target_id,
+                action="mute",
+                reason=reason,
+                until_date=until_date,
+                created_by=message.from_user.id,
             )
-    reason_text = record.reason or _normalize_reason(reason)
-    chat_title = message.chat.title or "-"
+            if created and not applied_trust:
+                await apply_trust_event(
+                    session,
+                    target_id,
+                    "chat_mute",
+                    -5,
+                    record.reason or "Мут в чате",
+                    ref_type="restriction",
+                    ref_id=record.id,
+                )
+                applied_trust = True
+
+    chat_label = (
+        f"Все модерируемые чаты ({len(chat_ids)})"
+        if multi_chat
+        else f"{message.chat.title or '-'} ({message.chat.id})"
+    )
     mod_label = _format_tg_user(message.from_user)
     target_label = (
         _format_tg_user(message.reply_to_message.from_user)
-        if message.reply_to_message
+        if message.reply_to_message and message.reply_to_message.from_user
         else str(target_id)
     )
     duration_label = duration_token if duration_token else "-"
@@ -547,26 +896,35 @@ async def cmd_mute(
     log_text = (
         "⛔ Модерация\n"
         "Действие: мут\n"
-        f"Чат: {chat_title} ({message.chat.id})\n"
+        f"Чаты: {chat_label}\n"
         f"Модератор: {mod_label}\n"
         f"Пользователь: {target_label}\n"
         f"Срок: {duration_label} (до {until_label})\n"
         f"Причина: {reason_text}"
     )
+    if failed_ids:
+        log_text += f"\nОшибки: {len(failed_ids)}"
     await _log_info(message.bot, settings, log_text)
     try:
-        await message.bot.send_message(
-            target_id,
-            (
-                f"Вам ограничено писать в чате {chat_title} "
-                f"до {until_label}. Причина: {reason_text}"
-            ),
-        )
+        if len(success_ids) > 1:
+            dm_text = (
+                f"Вам ограничено писать в чатах модерации до {until_label}. "
+                f"Причина: {reason_text}"
+            )
+        else:
+            chat_title = message.chat.title or "-"
+            dm_text = (
+                f"Вам ограничено писать в чате {chat_title} до {until_label}. "
+                f"Причина: {reason_text}"
+            )
+        await message.bot.send_message(target_id, dm_text)
     except Exception:
         pass
-    await message.answer(f"Пользователь в муте. Причина: {reason_text}")
 
-
+    summary = f"Пользователь в муте. Успешно: {len(success_ids)}"
+    if failed_ids:
+        summary += f", ошибки: {len(failed_ids)}."
+    await message.answer(summary)
 @router.message(F.text.startswith("/unmute"))
 async def cmd_unmute(
     message: Message, sessionmaker: async_sessionmaker, settings: Settings
@@ -580,23 +938,31 @@ async def cmd_unmute(
     """
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. Используйте /mod_chat_add."
-        )
+    if not message.from_user:
         return
-    if not message.from_user or not await _has_moderation_rights(
-        message.bot, sessionmaker, message.chat.id, message.from_user.id
-    ):
-        await message.answer("Нет доступа.")
-        return
+
+    is_staff = await _is_staff(sessionmaker, message.from_user.id)
+    if not is_staff:
+        if not await _is_moderated_chat(sessionmaker, message.chat.id):
+            await message.answer(
+                "Чат не в списке модерации. Используйте /mod_chat_add."
+            )
+            return
+        if not await _has_moderation_rights(
+            message.bot, sessionmaker, message.chat.id, message.from_user.id
+        ):
+            await message.answer("Нет доступа.")
+            return
 
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
-        await message.answer("Формат: /unmute <user_id> или ответом на сообщение.")
+        await message.answer(
+            "Формат: /unmute <user_id/@username> или ответом на сообщение."
+        )
         return
+
     permissions = ChatPermissions(
         can_send_messages=True,
         can_send_media_messages=True,
@@ -604,26 +970,56 @@ async def cmd_unmute(
         can_send_other_messages=True,
         can_add_web_page_previews=True,
     )
-    try:
-        await message.bot.restrict_chat_member(
-            message.chat.id,
-            target_id,
-            permissions=permissions,
-            until_date=None,
-        )
-    except Exception:
+
+    chat_ids = await _get_moderated_chat_ids(sessionmaker)
+    if not chat_ids:
+        await message.answer("Нет активных чатов модерации.")
+        return
+
+    success_ids: list[int] = []
+    failed_ids: list[int] = []
+    for chat_id in chat_ids:
+        try:
+            await message.bot.restrict_chat_member(
+                chat_id,
+                target_id,
+                permissions=permissions,
+                until_date=None,
+            )
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(exc.retry_after)
+            try:
+                await message.bot.restrict_chat_member(
+                    chat_id,
+                    target_id,
+                    permissions=permissions,
+                    until_date=None,
+                )
+            except Exception:
+                failed_ids.append(chat_id)
+                continue
+        except Exception:
+            failed_ids.append(chat_id)
+            continue
+        success_ids.append(chat_id)
+
+    if not success_ids:
         await message.answer("Не удалось размутить пользователя.")
         return
+
     async with sessionmaker() as session:
-        await _deactivate_restriction(
-            session,
-            chat_id=message.chat.id,
-            user_id=target_id,
-            action="mute",
-        )
-    await message.answer("Пользователь размучен.")
+        for chat_id in success_ids:
+            await _deactivate_restriction(
+                session,
+                chat_id=chat_id,
+                user_id=target_id,
+                action="mute",
+            )
 
-
+    summary = f"Пользователь размучен. Успешно: {len(success_ids)}"
+    if failed_ids:
+        summary += f", ошибки: {len(failed_ids)}."
+    await message.answer(summary)
 @router.message(F.text.startswith("/warn"))
 async def cmd_warn(
     message: Message, sessionmaker: async_sessionmaker, settings: Settings
@@ -637,601 +1033,222 @@ async def cmd_warn(
     """
     if message.chat.type not in {"group", "supergroup"}:
         return
-    if not await _is_moderated_chat(sessionmaker, message.chat.id):
-        await message.answer(
-            "Чат не в списке модерации. Используйте /mod_chat_add."
-        )
+    if not message.from_user:
         return
-    if not message.from_user or not await _has_moderation_rights(
-        message.bot, sessionmaker, message.chat.id, message.from_user.id
-    ):
-        await message.answer("Нет доступа.")
-        return
+
+    is_staff = await _is_staff(sessionmaker, message.from_user.id)
+    if not is_staff:
+        if not await _is_moderated_chat(sessionmaker, message.chat.id):
+            await message.answer(
+                "Чат не в списке модерации. Используйте /mod_chat_add."
+            )
+            return
+        if not await _has_moderation_rights(
+            message.bot, sessionmaker, message.chat.id, message.from_user.id
+        ):
+            await message.answer("Нет доступа.")
+            return
 
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /warn <user_id> [причина] " "или ответом на сообщение."
+            "Формат: /warn <user_id/@username> [причина] или ответом на сообщение."
         )
         return
 
+    chat_ids = await _get_moderated_chat_ids(sessionmaker)
+    if not chat_ids:
+        await message.answer("Нет активных чатов модерации.")
+        return
+    multi_chat = len(chat_ids) > 1
+
+    warn_counts: dict[int, int] = {}
     async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationWarn)
-            .where(
-                ModerationWarn.chat_id == message.chat.id,
-                ModerationWarn.user_id == target_id,
+        for chat_id in chat_ids:
+            result = await session.execute(
+                select(ModerationWarn)
+                .where(
+                    ModerationWarn.chat_id == chat_id,
+                    ModerationWarn.user_id == target_id,
+                )
+                .order_by(ModerationWarn.id.desc())
             )
-            .order_by(ModerationWarn.id.desc())
-        )
-        warn_record = result.scalars().first()
-        if warn_record:
-            warn_record.count = (warn_record.count or 0) + 1
-        else:
-            warn_record = ModerationWarn(
-                chat_id=message.chat.id,
-                user_id=target_id,
-                count=1,
-            )
-            session.add(warn_record)
+            warn_record = result.scalars().first()
+            if warn_record:
+                warn_record.count = (warn_record.count or 0) + 1
+            else:
+                warn_record = ModerationWarn(
+                    chat_id=chat_id,
+                    user_id=target_id,
+                    count=1,
+                )
+                session.add(warn_record)
+            warn_counts[chat_id] = warn_record.count or 0
         await session.commit()
-        warn_count = warn_record.count or 0
 
     reason_text = _normalize_reason(reason)
-    chat_title = message.chat.title or "-"
+    max_warn = max(warn_counts.values()) if warn_counts else 0
+    chat_label = (
+        f"Все модерируемые чаты ({len(chat_ids)})"
+        if multi_chat
+        else f"{message.chat.title or '-'} ({message.chat.id})"
+    )
     mod_label = _format_tg_user(message.from_user)
     target_label = (
         _format_tg_user(message.reply_to_message.from_user)
-        if message.reply_to_message
+        if message.reply_to_message and message.reply_to_message.from_user
         else str(target_id)
     )
     warn_log_text = (
         "⚠️ Модерация\n"
         "Действие: предупреждение\n"
-        f"Чат: {chat_title} ({message.chat.id})\n"
+        f"Чаты: {chat_label}\n"
         f"Модератор: {mod_label}\n"
         f"Пользователь: {target_label}\n"
-        f"Счетчик: {warn_count}/3\n"
+        f"Счетчик: {max_warn}/3\n"
         f"Причина: {reason_text}"
     )
     await _log_info(message.bot, settings, warn_log_text)
 
-    if warn_count < 3:
-        try:
-            await message.bot.send_message(
-                target_id,
-                (
-                    f"Вам вынесено предупреждение в чате {chat_title}. "
-                    f"Причина: {reason_text}. "
-                    f"Текущие предупреждения: {warn_count}/3."
-                ),
-            )
-        except Exception:
-            pass
-        await message.answer(
-            f"Пользователь получил " f"предупреждение ({warn_count}/3)."
-        )
-        return
+    mute_chat_ids = [chat_id for chat_id, count in warn_counts.items() if count >= 3]
+    mute_success: list[int] = []
+    mute_failed: list[int] = []
+    
+    if mute_chat_ids:
+        until_date = datetime.now(timezone.utc) + timedelta(days=7)
+        permissions = ChatPermissions(can_send_messages=False)
+        for chat_id in mute_chat_ids:
+            try:
+                await message.bot.restrict_chat_member(
+                    chat_id,
+                    target_id,
+                    permissions=permissions,
+                    until_date=until_date,
+                )
+            except TelegramRetryAfter as exc:
+                await asyncio.sleep(exc.retry_after)
+                try:
+                    await message.bot.restrict_chat_member(
+                        chat_id,
+                        target_id,
+                        permissions=permissions,
+                        until_date=until_date,
+                    )
+                except Exception:
+                    mute_failed.append(chat_id)
+                    continue
+            except Exception:
+                mute_failed.append(chat_id)
+                continue
+            mute_success.append(chat_id)
 
-    until_date = datetime.now(timezone.utc) + timedelta(days=7)
-    permissions = ChatPermissions(can_send_messages=False)
-    try:
-        await message.bot.restrict_chat_member(
-            message.chat.id,
-            target_id,
-            permissions=permissions,
-            until_date=until_date,
+        auto_reason = (
+            f"3 предупреждения: {reason_text}"
+            if reason_text != "Причина не указана"
+            else "3 предупреждения"
         )
-    except Exception:
-        await message.answer("Не удалось замутить " "после 3 предупреждений.")
-        return
-
-    auto_reason = (
-        f"3 предупреждения: {reason_text}"
-        if reason_text != "Причина не указана"
-        else "3 предупреждения"
-    )
-    async with sessionmaker() as session:
-        record, created = await _upsert_restriction(
-            session,
-            chat_id=message.chat.id,
-            user_id=target_id,
-            action="mute",
-            reason=auto_reason,
-            until_date=until_date,
-            created_by=message.from_user.id,
-        )
-        if created:
-            await apply_trust_event(
-                session,
-                target_id,
-                "chat_mute",
-                -5,
-                record.reason or "Мут в чате",
-                ref_type="restriction",
-                ref_id=record.id,
-            )
-
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationWarn)
-            .where(
-                ModerationWarn.chat_id == message.chat.id,
-                ModerationWarn.user_id == target_id,
-            )
-            .order_by(ModerationWarn.id.desc())
-        )
-        warn_record = result.scalars().first()
-        if warn_record:
-            warn_record.count = 0
+        applied_trust = False
+        async with sessionmaker() as session:
+            for chat_id in mute_success:
+                record, created = await _upsert_restriction(
+                    session,
+                    chat_id=chat_id,
+                    user_id=target_id,
+                    action="mute",
+                    reason=auto_reason,
+                    until_date=until_date,
+                    created_by=message.from_user.id,
+                )
+                if created and not applied_trust:
+                    await apply_trust_event(
+                        session,
+                        target_id,
+                        "chat_mute",
+                        -5,
+                        record.reason or "Мут в чате",
+                        ref_type="restriction",
+                        ref_id=record.id,
+                    )
+                    applied_trust = True
+                
+                result = await session.execute(
+                    select(ModerationWarn)
+                    .where(
+                        ModerationWarn.chat_id == chat_id,
+                        ModerationWarn.user_id == target_id,
+                    )
+                    .order_by(ModerationWarn.id.desc())
+                )
+                warn_record = result.scalars().first()
+                if warn_record:
+                    warn_record.count = 0
             await session.commit()
 
-    until_label = until_date.strftime("%Y-%m-%d %H:%M UTC")
-    mute_log_text = (
-        "⛔ Модерация\n"
-        "Действие: мут (3 предупреждения)\n"
-        f"Чат: {chat_title} ({message.chat.id})\n"
-        f"Модератор: {mod_label}\n"
-        f"Пользователь: {target_label}\n"
-        f"Срок: 7d (до {until_label})\n"
-        f"Причина: {record.reason or auto_reason}"
-    )
-    await _log_info(message.bot, settings, mute_log_text)
+        until_label = until_date.strftime("%Y-%m-%d %H:%M UTC")
+        mute_multi_chat = len(mute_success) > 1
+        mute_chat_label = (
+            f"Все модерируемые чаты ({len(mute_success)})"
+            if mute_multi_chat
+            else f"{message.chat.title or '-'} ({message.chat.id})"
+        )
+        mute_log_text = (
+            "⛔ Модерация\n"
+            "Дейсвие: мут (3 предупреждения)\n"
+            f"Чаты: {mute_chat_label}\n"
+            f"Модератор: {mod_label}\n"
+            f"Пользователь: {target_label}\n"
+            f"Срок: 7d (до {until_label})\n"
+            f"Причина: {auto_reason}"
+        )
+        if mute_failed:
+            mute_log_text += f"\nОшибки: {len(mute_failed)}"
+        await _log_info(message.bot, settings, mute_log_text)
+
+    if mute_success:
+        try:
+            if len(mute_success) > 1:
+                dm_text = (
+                    "Вы получили 3 предупреждения в чатах модерации. "
+                    "Вам выдан мут на 7 дней."
+                )
+            else:
+                chat_title = message.chat.title or "-"
+                dm_text = (
+                    f"Вы получили 3 предупреждения в чате {chat_title}. "
+                    "Вам выдан мут на 7 дней."
+                )
+            await message.bot.send_message(target_id, dm_text)
+        except Exception:
+            pass
+        summary = (
+            f"Пользователь получил 3 предупреждения и замучен на 7 дней. "
+            f"Мутов: {len(mute_success)}"
+        )
+        if mute_failed:
+            summary += f", ошибки: {len(mute_failed)}."
+        await message.answer(summary)
+        return
+
     try:
-        await message.bot.send_message(
-            target_id,
-            (
-                f"Вы получили 3 предупреждения в чате {chat_title}. "
-                f"Вам выдан мут на 7 дней (до {until_label}). "
-                f"Причина: {record.reason or auto_reason}"
-            ),
-        )
-    except Exception:
-        pass
-    await message.answer(
-        "Пользователь получил 3 " "предупреждения и замучен на 7 дней."
-    )
-
-
-@router.my_chat_member()
-async def on_bot_added(
-    event: ChatMemberUpdated, sessionmaker: async_sessionmaker
-) -> None:
-    """Обрабатывает on bot added.
-
-    Аргументы:
-        event: Значение event.
-        sessionmaker: Значение sessionmaker.
-    """
-    if event.chat.type not in {"group", "supergroup", "channel"}:
-        return
-    new_status = event.new_chat_member.status
-    if new_status in {"member", "administrator"}:
-        await _upsert_moderation_chat(
-            sessionmaker,
-            event.chat.id,
-            event.chat.title,
-            active=True,
-        )
-    elif new_status in {"left", "kicked"}:
-        await _upsert_moderation_chat(
-            sessionmaker,
-            event.chat.id,
-            event.chat.title,
-            active=False,
-        )
-
-
-@router.chat_member()
-async def on_user_join(
-    event: ChatMemberUpdated,
-    sessionmaker: async_sessionmaker,
-) -> None:
-    """Обрабатывает on user join.
-
-    Аргументы:
-        event: Значение event.
-        sessionmaker: Значение sessionmaker.
-    """
-    if event.chat.type not in {"group", "supergroup"}:
-        return
-    if not await _is_moderated_chat(sessionmaker, event.chat.id):
-        return
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(DealRoom).where(DealRoom.chat_id == event.chat.id)
-        )
-        if result.scalar_one_or_none():
-            return
-    if event.new_chat_member.user.is_bot:
-        return
-    old_status = event.old_chat_member.status
-    new_status = event.new_chat_member.status
-    if old_status in {"left", "kicked"} and new_status in {
-        "member",
-        "administrator",
-    }:
-        await _log_member_event(
-            sessionmaker,
-            chat_id=event.chat.id,
-            user_id=event.new_chat_member.user.id,
-            event_type="join",
-        )
-        name = html.escape(event.new_chat_member.user.first_name or "друг")
-        text = CHAT_WELCOME_TEXT.format(name=name)
-        await event.bot.send_message(
-            event.chat.id,
-            text,
-            reply_markup=referral_kb(),
-        )
-    elif old_status in {"member", "administrator"} and new_status in {
-        "left",
-        "kicked",
-    }:
-        await _log_member_event(
-            sessionmaker,
-            chat_id=event.chat.id,
-            user_id=event.new_chat_member.user.id,
-            event_type="leave",
-        )
-
-
-async def _is_staff(sessionmaker: async_sessionmaker, user_id: int) -> bool:
-    """Обрабатывает is staff.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        user_id: Значение user_id.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    async with sessionmaker() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-        if not user:
-            return False
-        return user.role in {"owner", "admin", "moderator", "guarantor"}
-
-
-async def _has_moderation_rights(
-    bot,
-    sessionmaker: async_sessionmaker,
-    chat_id: int,
-    user_id: int,
-) -> bool:
-    """Return whether the user can run moderation commands in the chat."""
-    if await _is_staff(sessionmaker, user_id):
-        return True
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-    except Exception:
-        return False
-    return member.status in {"administrator", "creator"}
-
-
-async def _is_moderated_chat(sessionmaker: async_sessionmaker, chat_id: int) -> bool:
-    """Обрабатывает is moderated chat.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        chat_id: Значение chat_id.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationChat).where(
-                ModerationChat.chat_id == chat_id,
-                ModerationChat.active.is_(True),
+        if multi_chat:
+            dm_text = (
+                f"Вам вынесено предупреждение в чатах модерации. "
+                f"Причина: {reason_text}. Текущий счетчик: {max_warn}/3."
             )
-        )
-        return result.scalar_one_or_none() is not None
-
-
-async def _load_blacklist(
-    sessionmaker: async_sessionmaker, settings: Settings
-) -> list[str]:
-    """Обрабатывает load blacklist.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        settings: Значение settings.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    words = {w.strip().lower() for w in settings.moderation_blacklist if w.strip()}
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationWord.word).where(ModerationWord.active.is_(True))
-        )
-        for row in result.all():
-            if row[0]:
-                words.add(row[0].strip().lower())
-    return list(words)
-
-
-async def _is_banned_sticker_pack(
-    sessionmaker: async_sessionmaker, set_name: str
-) -> bool:
-    """Обрабатывает is banned sticker pack.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        set_name: Значение set_name.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationStickerPack).where(
-                ModerationStickerPack.set_name == set_name,
-                ModerationStickerPack.active.is_(True),
+        else:
+            chat_title = message.chat.title or "-"
+            dm_text = (
+                f"Вам вынесено предупреждение в чате {chat_title}. "
+                f"Причина: {reason_text}. Текущий счетчик: {max_warn}/3."
             )
-        )
-        return result.scalar_one_or_none() is not None
-
-
-async def _get_sticker_pack_record(
-    sessionmaker: async_sessionmaker, set_name: str
-) -> ModerationStickerPack | None:
-    """Обрабатывает get sticker pack record.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        set_name: Значение set_name.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationStickerPack).where(
-                ModerationStickerPack.set_name == set_name
-            )
-        )
-        return result.scalar_one_or_none()
-
-
-async def _get_custom_emoji_records(
-    sessionmaker: async_sessionmaker, emoji_ids: list[str]
-) -> dict[str, ModerationCustomEmoji]:
-    """Обрабатывает get custom emoji records.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        emoji_ids: Значение emoji_ids.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    if not emoji_ids:
-        return {}
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationCustomEmoji).where(
-                ModerationCustomEmoji.emoji_id.in_(emoji_ids)
-            )
-        )
-        records = result.scalars().all()
-        return {record.emoji_id: record for record in records}
-
-
-async def _get_custom_emoji_pack_records(
-    sessionmaker: async_sessionmaker, set_names: list[str]
-) -> dict[str, ModerationCustomEmojiPack]:
-    """Обрабатывает get custom emoji pack records.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        set_names: Значение set_names.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    if not set_names:
-        return {}
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(ModerationCustomEmojiPack).where(
-                ModerationCustomEmojiPack.set_name.in_(set_names)
-            )
-        )
-        records = result.scalars().all()
-        return {record.set_name: record for record in records}
-
-
-async def _create_case(
-    sessionmaker: async_sessionmaker,
-    *,
-    kind: str,
-    chat_id: int,
-    user_id: int | None,
-    payload: str | None,
-    prev_role: str | None = None,
-) -> int:
-    """Обрабатывает create case.
-
-    Аргументы:
-        sessionmaker: Значение sessionmaker.
-        kind: Значение kind.
-        chat_id: Значение chat_id.
-        user_id: Значение user_id.
-        payload: Значение payload.
-        prev_role: Значение prev_role.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    async with sessionmaker() as session:
-        case = ModerationCase(
-            kind=kind,
-            chat_id=chat_id,
-            user_id=user_id,
-            payload=payload,
-            prev_role=prev_role,
-        )
-        session.add(case)
-        await session.commit()
-        return case.id
-
-
-def _case_kb(case_id: int, kind: str) -> InlineKeyboardMarkup:
-    """Обрабатывает case kb.
-
-    Аргументы:
-        case_id: Значение case_id.
-        kind: Значение kind.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    if kind == "word":
-        ok_text = "Оставить бан"
-        cancel_text = "Снять бан"
-    elif kind == "sticker_pack":
-        ok_text = "Запретить стикерпак"
-        cancel_text = "Разрешить"
-    elif kind == "custom_emoji":
-        ok_text = "Запретить пак"
-        cancel_text = "Разрешить пак"
-    else:
-        ok_text = "Подтвердить"
-        cancel_text = "Отклонить"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=ok_text,
-                    callback_data=f"mod_case_ok:{case_id}",
-                ),
-                InlineKeyboardButton(
-                    text=cancel_text,
-                    callback_data=f"mod_case_cancel:{case_id}",
-                ),
-            ]
-        ]
-    )
-
-
-async def _log_case(
-    bot,
-    settings: Settings,
-    text: str,
-    case_id: int,
-    kind: str,
-) -> None:
-    """Обрабатывает log case.
-
-    Аргументы:
-        bot: Значение bot.
-        settings: Значение settings.
-        text: Значение text.
-        case_id: Значение case_id.
-        kind: Значение kind.
-    """
-    chat_id, topic_id = get_admin_target(settings)
-    if chat_id == 0:
-        return
-    await _safe_send_message(
-        bot,
-        chat_id,
-        text,
-        message_thread_id=topic_id,
-        reply_markup=_case_kb(case_id, kind),
-    )
-
-
-async def _log_info(
-    bot,
-    settings: Settings,
-    text: str,
-) -> None:
-    """Обрабатывает log info.
-
-    Аргументы:
-        bot: Значение bot.
-        settings: Значение settings.
-        text: Значение text.
-    """
-    chat_id, topic_id = get_admin_target(settings)
-    if chat_id == 0:
-        return
-    await _safe_send_message(
-        bot,
-        chat_id,
-        text,
-        message_thread_id=topic_id,
-    )
-
-
-async def _safe_send_message(bot, chat_id: int, text: str, **kwargs) -> None:
-    """Обрабатывает safe send message.
-
-    Аргументы:
-        bot: Значение bot.
-        chat_id: Значение chat_id.
-        text: Значение text.
-        **kwargs: Значение **kwargs.
-    """
-    try:
-        await bot.send_message(chat_id, text, **kwargs)
-    except TelegramRetryAfter as exc:
-        await asyncio.sleep(exc.retry_after)
-        await bot.send_message(chat_id, text, **kwargs)
-
-
-def _parse_payload(payload: str | None) -> dict[str, object]:
-    """Обрабатывает parse payload.
-
-    Аргументы:
-        payload: Значение payload.
-
-    Возвращает:
-        Возвращает Значение.
-    """
-    if not payload:
-        return {}
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return {}
-    if isinstance(data, dict):
-        return {str(k): v for k, v in data.items()}
-    return {}
-
-
-async def _forward_to_admin(
-    bot,
-    settings: Settings,
-    message: Message,
-) -> None:
-    """Обрабатывает forward to admin.
-
-    Аргументы:
-        bot: Значение bot.
-        settings: Значение settings.
-        message: Значение message.
-    """
-    chat_id, topic_id = get_admin_target(settings)
-    if chat_id == 0:
-        return
-    try:
-        await bot.forward_message(
-            chat_id=chat_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-            message_thread_id=topic_id,
-        )
+        await message.bot.send_message(target_id, dm_text)
     except Exception:
         pass
 
-
+    summary = f"Пользователь получил предупреждение ({max_warn}/3)."
+    await message.answer(summary)
 @router.message(F.chat.type.in_({"group", "supergroup"}) & ~F.text.startswith("/"))
 async def moderate_chat(
     message: Message,
