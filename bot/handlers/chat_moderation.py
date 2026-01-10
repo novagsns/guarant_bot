@@ -599,7 +599,7 @@ async def cmd_ban(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /ban <user_id/@username> [причина] или ответом на пересланное сообщение."
+            "Формат: /ban user_id/@username [причина] или ответом на пересланное сообщение."
         )
         return
 
@@ -726,7 +726,7 @@ async def cmd_unban(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /unban <user_id/@username> или ответом на пересланное сообщение."
+            "Формат: /unban user_id/@username или ответом на пересланное сообщение."
         )
         return
 
@@ -814,7 +814,7 @@ async def cmd_mute(
     else:
         if len(parts) < 3:
             await message.answer(
-                "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на пересланное сообщение."
+                "Формат: /mute user_id/@username 1h/2d [причина] или ответом на пересланное сообщение."
             )
             return
         target_identifier = parts[1]
@@ -824,7 +824,7 @@ async def cmd_mute(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на пересланное сообщение."
+            "Формат: /mute user_id/@username 1h/2d [причина] или ответом на пересланное сообщение."
         )
         return
 
@@ -976,7 +976,7 @@ async def cmd_unmute(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /unmute <user_id/@username> или ответом на пересланное сообщение."
+            "Формат: /unmute user_id/@username или ответом на пересланное сообщение."
         )
         return
 
@@ -1071,7 +1071,7 @@ async def cmd_warn(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /warn <user_id/@username> [причина] или ответом на пересланное сообщение."
+            "Формат: /warn user_id/@username [причина] или ответом на пересланное сообщение."
         )
         return
 
