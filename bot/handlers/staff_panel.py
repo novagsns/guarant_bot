@@ -1318,16 +1318,6 @@ async def mod_approve(
             )
             if description:
                 text += f"\n📜 Описание:\n{description}"
-            await create_broadcast_request(
-                session,
-                callback.bot,
-                settings,
-                creator_id=seller.id,
-                text=text,
-                kind="vip_auto",
-                cost=0,
-                ad_id=ad.id,
-            )
     await callback.message.answer("Объявление одобрено.")
     await _log_admin(
         callback.bot,
@@ -2668,6 +2658,9 @@ async def broadcast_approve(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
+    await callback.answer("Рассылки отключены.")
+    await callback.message.answer("Рассылки отключены.")
+    return
     user = await _load_user(sessionmaker, callback.from_user)
     if not _is_moderator(user.role):
         await callback.answer("Нет доступа.")
@@ -2786,6 +2779,8 @@ async def staff_broadcast(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
+    await message.answer("Рассылки отключены.")
+    return
     async with sessionmaker() as session:
         sender = await get_or_create_user(session, message.from_user)
         if not _is_admin(sender.role) and not is_owner(

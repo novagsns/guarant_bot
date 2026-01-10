@@ -1187,12 +1187,9 @@ async def profile_vip(
         "  – Обмен с доплатой: 370 ₽ + 9% от доплаты\n"
         "  – Рассрочка: 12%\n"
         "• 1 купон в месяц: −50% на комиссию одной сделки\n"
-        "• Рассылка новых аккаунтов через модерацию\n"
         "• Витрина VIP / «VIP-лот дня» после модерации по очереди среди VIP\n\n"
         "<b>Платные опции:</b>\n"
-        "• Рассылка всем пользователям — 3000 Coins (до 3 раз в день)\n"
-        "• Бесплатная сделка на неделю — 6000 Coins\n\n"
-        "📣 Любая рассылка проходит модерацию."
+        "• Бесплатная сделка на неделю — 6000 Coins"
     )
     await callback.message.answer(text, reply_markup=vip_menu_kb())
     await callback.answer()
@@ -1209,6 +1206,10 @@ async def vip_broadcast_start(
         state: Value for state.
         sessionmaker: Value for sessionmaker.
     """
+    await state.clear()
+    await callback.message.answer("Рассылки отключены.")
+    await callback.answer()
+    return
     async with sessionmaker() as session:
         result = await session.execute(
             select(User).where(User.id == callback.from_user.id)
@@ -1244,6 +1245,9 @@ async def vip_broadcast_text(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
+    await state.clear()
+    await message.answer("Рассылки отключены.")
+    return
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите текст рассылки.")

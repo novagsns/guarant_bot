@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
@@ -45,6 +46,15 @@ from bot.services.trust import apply_trust_event
 
 router = Router()
 
+MODERATION_LOGS_ENABLED = False
+
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def _looks_like_username(value: str) -> bool:
+    return bool(_USERNAME_RE.fullmatch(value))
+
 
 def _parse_target_and_reason(
     message: Message, args: list[str]
@@ -58,21 +68,23 @@ def _parse_target_and_reason(
     Возвращает:
         Возвращает Значение.
     """
-    if message.reply_to_message:
+    if args:
+        raw_id = args[0].strip()
+        reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
+        if raw_id:
+            stripped = raw_id.lstrip("@")
+            if stripped.isdigit():
+                return int(stripped), reason or "-"
+            if raw_id.startswith("@") and len(raw_id) > 1:
+                return raw_id, reason or "-"
+            if not message.reply_to_message and _looks_like_username(raw_id):
+                return raw_id, reason or "-"
+    if message.reply_to_message and message.reply_to_message.forward_from:
         reason = " ".join(args).strip() if args else "-"
-        if message.reply_to_message.forward_from:
-            return message.reply_to_message.forward_from.id, reason or "-"
-        if message.reply_to_message.from_user:
-            return message.reply_to_message.from_user.id, reason or "-"
+        return message.reply_to_message.forward_from.id, reason or "-"
     if not args:
         return None, ""
-    raw_id = args[0].strip()
-    reason = " ".join(args[1:]).strip() if len(args) > 1 else "-"
-    if not raw_id:
-        return None, ""
-    if raw_id.lstrip("@").isdigit():
-        return int(raw_id.lstrip("@")), reason or "-"
-    return raw_id, reason or "-"
+    return None, ""
 
 
 def _parse_duration(value: str) -> timedelta | None:
@@ -357,10 +369,15 @@ async def _has_moderation_rights(
 
 
 async def _log_info(bot, settings: Settings, text: str) -> None:
+    if not MODERATION_LOGS_ENABLED:
+        return
     chat_id, topic_id = get_admin_target(settings)
     if not chat_id:
         return
-    await bot.send_message(chat_id, text, message_thread_id=topic_id)
+    try:
+        await bot.send_message(chat_id, text, message_thread_id=topic_id)
+    except Exception:
+        pass
 
 
 async def _load_blacklist(
@@ -582,7 +599,7 @@ async def cmd_ban(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /ban <user_id/@username> [причина] или ответом на сообщение."
+            "Формат: /ban <user_id/@username> [причина] или ответом на пересланное сообщение."
         )
         return
 
@@ -709,7 +726,7 @@ async def cmd_unban(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /unban <user_id/@username> или ответом на сообщение."
+            "Формат: /unban <user_id/@username> или ответом на пересланное сообщение."
         )
         return
 
@@ -797,7 +814,7 @@ async def cmd_mute(
     else:
         if len(parts) < 3:
             await message.answer(
-                "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на сообщение."
+                "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на пересланное сообщение."
             )
             return
         target_identifier = parts[1]
@@ -807,7 +824,7 @@ async def cmd_mute(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на сообщение."
+            "Формат: /mute <user_id/@username> <1h/2d> [причина] или ответом на пересланное сообщение."
         )
         return
 
@@ -959,7 +976,7 @@ async def cmd_unmute(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /unmute <user_id/@username> или ответом на сообщение."
+            "Формат: /unmute <user_id/@username> или ответом на пересланное сообщение."
         )
         return
 
@@ -1054,7 +1071,7 @@ async def cmd_warn(
     target_id = await _resolve_user_identifier(message.bot, target_identifier)
     if not target_id:
         await message.answer(
-            "Формат: /warn <user_id/@username> [причина] или ответом на сообщение."
+            "Формат: /warn <user_id/@username> [причина] или ответом на пересланное сообщение."
         )
         return
 
