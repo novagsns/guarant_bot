@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from bot.db.models import (
     Deal,
@@ -69,9 +70,31 @@ async def get_trust_state(session, user_id: int) -> TrustState:
     state = result.scalar_one_or_none()
     if state:
         return state
+    user_result = await session.execute(select(User.id).where(User.id == user_id))
+    if user_result.scalar_one_or_none() is None:
+        session.add(User(id=user_id, username=None, full_name=None))
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            user_result = await session.execute(
+                select(User.id).where(User.id == user_id)
+            )
+            if user_result.scalar_one_or_none() is None:
+                raise
     state = TrustState(user_id=user_id, score=0, frozen=False, cap=TRUST_MAX)
     session.add(state)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        result = await session.execute(
+            select(TrustState).where(TrustState.user_id == user_id)
+        )
+        state = result.scalar_one_or_none()
+        if state:
+            return state
+        raise
     return state
 
 
