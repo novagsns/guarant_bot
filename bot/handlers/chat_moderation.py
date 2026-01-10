@@ -56,6 +56,15 @@ def _looks_like_username(value: str) -> bool:
     return bool(_USERNAME_RE.fullmatch(value))
 
 
+def _looks_like_target_token(value: str) -> bool:
+    if not value:
+        return False
+    stripped = value.lstrip("@")
+    if not stripped:
+        return False
+    return stripped.isdigit() or value.startswith("@") or _looks_like_username(value)
+
+
 def _parse_target_and_reason(
     message: Message, args: list[str]
 ) -> tuple[int | str | None, str]:
@@ -75,9 +84,7 @@ def _parse_target_and_reason(
             stripped = raw_id.lstrip("@")
             if stripped.isdigit():
                 return int(stripped), reason or "-"
-            if raw_id.startswith("@") and len(raw_id) > 1:
-                return raw_id, reason or "-"
-            if not message.reply_to_message and _looks_like_username(raw_id):
+            if _looks_like_target_token(raw_id):
                 return raw_id, reason or "-"
     if message.reply_to_message and message.reply_to_message.forward_from:
         reason = " ".join(args).strip() if args else "-"
@@ -147,7 +154,12 @@ def _normalize_reason(reason: str | None) -> str:
     return clean
 
 
-async def _resolve_user_identifier(bot, identifier: int | str | None) -> int | None:
+async def _resolve_user_identifier(
+    bot,
+    identifier: int | str | None,
+    *,
+    sessionmaker: async_sessionmaker | None = None,
+) -> int | None:
     if identifier is None:
         return None
     if isinstance(identifier, int):
@@ -158,8 +170,17 @@ async def _resolve_user_identifier(bot, identifier: int | str | None) -> int | N
     try:
         user = await bot.get_chat(f"@{username}")
     except TelegramBadRequest:
-        return None
-    return user.id
+        user = None
+    if user:
+        return user.id
+    if sessionmaker:
+        async with sessionmaker() as session:
+            result = await session.execute(
+                select(User.id).where(User.username == username)
+            )
+            user_id = result.scalar_one_or_none()
+            return user_id
+    return None
 
 
 async def _upsert_restriction(
@@ -596,10 +617,19 @@ async def cmd_ban(
 
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
-    target_id = await _resolve_user_identifier(message.bot, target_identifier)
-    if not target_id:
+    if target_identifier is None:
         await message.answer(
             "Формат: /ban user_id/@username [причина] или ответом на пересланное сообщение."
+        )
+        return
+    target_id = await _resolve_user_identifier(
+        message.bot,
+        target_identifier,
+        sessionmaker=sessionmaker,
+    )
+    if target_id is None:
+        await message.answer(
+            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -723,10 +753,19 @@ async def cmd_unban(
 
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
-    target_id = await _resolve_user_identifier(message.bot, target_identifier)
-    if not target_id:
+    if target_identifier is None:
         await message.answer(
             "Формат: /unban user_id/@username или ответом на пересланное сообщение."
+        )
+        return
+    target_id = await _resolve_user_identifier(
+        message.bot,
+        target_identifier,
+        sessionmaker=sessionmaker,
+    )
+    if target_id is None:
+        await message.answer(
+            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -804,27 +843,34 @@ async def cmd_mute(
     duration_token = ""
     reason = "-"
     target_identifier: int | str | None = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        duration_token = parts[1] if len(parts) > 1 else ""
-        reason = " ".join(parts[2:]).strip() if len(parts) > 2 else "-"
-        if message.reply_to_message.forward_from:
-            target_identifier = message.reply_to_message.forward_from.id
-        else:
-            target_identifier = message.reply_to_message.from_user.id
-    else:
+    first_arg = parts[1] if len(parts) > 1 else ""
+    if first_arg and _looks_like_target_token(first_arg):
         if len(parts) < 3:
             await message.answer(
                 "Формат: /mute user_id/@username 1h/2d [причина] или ответом на пересланное сообщение."
             )
             return
-        target_identifier = parts[1]
+        target_identifier = first_arg
         duration_token = parts[2]
         reason = " ".join(parts[3:]).strip() if len(parts) > 3 else "-"
-
-    target_id = await _resolve_user_identifier(message.bot, target_identifier)
-    if not target_id:
+    elif message.reply_to_message and message.reply_to_message.forward_from:
+        duration_token = first_arg
+        reason = " ".join(parts[2:]).strip() if len(parts) > 2 else "-"
+        target_identifier = message.reply_to_message.forward_from.id
+    else:
         await message.answer(
             "Формат: /mute user_id/@username 1h/2d [причина] или ответом на пересланное сообщение."
+        )
+        return
+
+    target_id = await _resolve_user_identifier(
+        message.bot,
+        target_identifier,
+        sessionmaker=sessionmaker,
+    )
+    if target_id is None:
+        await message.answer(
+            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -973,10 +1019,19 @@ async def cmd_unmute(
 
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
-    target_id = await _resolve_user_identifier(message.bot, target_identifier)
-    if not target_id:
+    if target_identifier is None:
         await message.answer(
             "Формат: /unmute user_id/@username или ответом на пересланное сообщение."
+        )
+        return
+    target_id = await _resolve_user_identifier(
+        message.bot,
+        target_identifier,
+        sessionmaker=sessionmaker,
+    )
+    if target_id is None:
+        await message.answer(
+            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -1068,10 +1123,19 @@ async def cmd_warn(
 
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
-    target_id = await _resolve_user_identifier(message.bot, target_identifier)
-    if not target_id:
+    if target_identifier is None:
         await message.answer(
             "Формат: /warn user_id/@username [причина] или ответом на пересланное сообщение."
+        )
+        return
+    target_id = await _resolve_user_identifier(
+        message.bot,
+        target_identifier,
+        sessionmaker=sessionmaker,
+    )
+    if target_id is None:
+        await message.answer(
+            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
         )
         return
 
