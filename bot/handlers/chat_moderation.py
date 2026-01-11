@@ -110,6 +110,10 @@ def _forwarded_user_missing(message: Message) -> bool:
     return _is_forwarded_message(message) and _forwarded_user_id(message) is None
 
 
+def _is_member_status(status: str | None) -> bool:
+    return status in {"creator", "administrator", "member", "restricted"}
+
+
 def _parse_target_and_reason(
     message: Message, args: list[str]
 ) -> tuple[int | str | None, str]:
@@ -600,6 +604,39 @@ def _parse_payload(payload: str | None) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+@router.chat_member()
+async def welcome_new_member(
+    event: ChatMemberUpdated, sessionmaker: async_sessionmaker
+) -> None:
+    """Send welcome message for moderated chats when a new user joins."""
+    if not event.new_chat_member or not event.new_chat_member.user:
+        return
+    user = event.new_chat_member.user
+    if user.is_bot:
+        return
+    if event.chat.type not in {"group", "supergroup"}:
+        return
+    if not _is_member_status(event.new_chat_member.status):
+        return
+    if _is_member_status(event.old_chat_member.status):
+        return
+    if not await _is_moderated_chat(sessionmaker, event.chat.id):
+        return
+
+    name = user.full_name or user.first_name or "друг"
+    text = CHAT_WELCOME_TEXT.format(name=html.escape(name))
+    try:
+        await event.bot.send_message(event.chat.id, text, parse_mode="HTML")
+    except Exception:
+        pass
+    await _log_member_event(
+        sessionmaker,
+        chat_id=event.chat.id,
+        user_id=user.id,
+        event_type="join",
+    )
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}) & ~F.text.startswith("/"))
