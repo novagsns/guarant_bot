@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -22,11 +23,11 @@ async def topic_activity_tracker(
     message: Message, sessionmaker: async_sessionmaker
 ) -> None:
     if message.message_thread_id != TARGET_TOPIC_ID:
-        return
+        raise SkipHandler
     if not message.from_user or message.from_user.is_bot:
-        return
+        raise SkipHandler
     if message.text and message.text.strip().startswith("/"):
-        return
+        raise SkipHandler
 
     counted = await record_topic_message(
         sessionmaker,
@@ -36,3 +37,4 @@ async def topic_activity_tracker(
     )
     if counted:
         await maybe_update_leaderboard(message.bot, sessionmaker)
+    raise SkipHandler

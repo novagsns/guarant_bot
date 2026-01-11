@@ -97,6 +97,7 @@ async def main() -> None:
 
     dp.include_router(start.router)
     dp.include_router(admin_docs.router)
+    dp.include_router(topic_activity.router)
     dp.include_router(chat_moderation.router)
     dp.include_router(moderation_commands.router)
     dp.include_router(coin_drop.router)
@@ -109,7 +110,6 @@ async def main() -> None:
     dp.include_router(staff.router)
     dp.include_router(staff_panel.router)
     dp.include_router(support.router)
-    dp.include_router(topic_activity.router)
 
     asyncio.create_task(daily_report_loop(bot, sessionmaker, settings))
     asyncio.create_task(vip_promotion_loop(sessionmaker))

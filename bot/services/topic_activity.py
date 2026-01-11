@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import html
 
 from aiogram.exceptions import TelegramBadRequest
@@ -24,7 +24,7 @@ try:
 
     LEADERBOARD_TZ = ZoneInfo("Europe/Moscow")
 except Exception:  # pragma: no cover - fallback for missing tz data
-    LEADERBOARD_TZ = timezone.utc
+    LEADERBOARD_TZ = timezone(timedelta(hours=3))
 
 TARGET_CHAT_ID = -1001582810534
 TARGET_TOPIC_ID = 390145
