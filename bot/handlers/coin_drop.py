@@ -13,7 +13,7 @@ from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.config import Settings
-from bot.db.models import CoinDrop, User, UserAction
+from bot.db.models import CoinDrop, User
 from bot.services.coin_drops import apply_coin_drop_credit, roll_coin_drop_amount
 from bot.utils.roles import is_owner, is_staff
 
@@ -37,17 +37,6 @@ def _format_winner_label(user) -> str:
         return f"@{html.escape(username)}"
     full_name = getattr(user, "full_name", None) or getattr(user, "first_name", None)
     return html.escape(full_name) if full_name else "кто-то"
-
-
-async def _has_started(session, user_id: int) -> bool:
-    result = await session.execute(
-        select(UserAction.id).where(
-            UserAction.user_id == user_id,
-            UserAction.action_type == "message",
-            UserAction.action.like("/start%"),
-        )
-    )
-    return result.scalar_one_or_none() is not None
 
 
 @router.message(Command("gold"))
@@ -165,7 +154,7 @@ async def claim_gold_drop(
 
         result = await session.execute(select(User).where(User.id == callback.from_user.id))
         user = result.scalar_one_or_none()
-        if user and await _has_started(session, user.id):
+        if user:
             session.add(
                 apply_coin_drop_credit(
                     user=user,
