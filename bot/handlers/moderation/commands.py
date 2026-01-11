@@ -17,6 +17,7 @@ from bot.db.models import ModerationWarn
 from bot.handlers.chat_moderation import (
     _deactivate_restriction,
     _format_tg_user,
+    _forwarded_user_missing,
     _get_moderated_chat_ids,
     _has_moderation_rights,
     _is_moderated_chat,
@@ -33,6 +34,11 @@ from bot.handlers.chat_moderation import (
 from bot.services.trust import apply_trust_event
 
 router = Router()
+
+FORWARD_USER_MISSING_TEXT = (
+    "Не удалось определить автора пересланного сообщения. "
+    "Укажите user_id/@username."
+)
 
 
 @router.message(F.text == "/mod_chat_add")
@@ -97,6 +103,9 @@ async def cmd_ban(
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
     if target_identifier is None:
+        if _forwarded_user_missing(message):
+            await message.answer(FORWARD_USER_MISSING_TEXT)
+            return
         await message.answer(
             "Формат: /ban user_id/@username [причина] или ответом на пересланное сообщение."
         )
@@ -108,7 +117,7 @@ async def cmd_ban(
     )
     if target_id is None:
         await message.answer(
-            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
+            "Не удалось найти пользователя. Если пользователь не писал боту, Telegram не дает получить его ID по @username. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -227,6 +236,9 @@ async def cmd_unban(
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
     if target_identifier is None:
+        if _forwarded_user_missing(message):
+            await message.answer(FORWARD_USER_MISSING_TEXT)
+            return
         await message.answer(
             "Формат: /unban user_id/@username или ответом на пересланное сообщение."
         )
@@ -238,7 +250,7 @@ async def cmd_unban(
     )
     if target_id is None:
         await message.answer(
-            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
+            "Не удалось найти пользователя. Если пользователь не писал боту, Telegram не дает получить его ID по @username. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -324,6 +336,9 @@ async def cmd_mute(
         duration_token = first_arg
         reason = " ".join(parts[2:]).strip() if len(parts) > 2 else "-"
         target_identifier = message.reply_to_message.forward_from.id
+    elif _forwarded_user_missing(message):
+        await message.answer(FORWARD_USER_MISSING_TEXT)
+        return
     else:
         await message.answer(
             "Формат: /mute user_id/@username 1h/2d [причина] или ответом на пересланное сообщение."
@@ -337,7 +352,7 @@ async def cmd_mute(
     )
     if target_id is None:
         await message.answer(
-            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
+            "Не удалось найти пользователя. Если пользователь не писал боту, Telegram не дает получить его ID по @username. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -483,6 +498,9 @@ async def cmd_unmute(
     parts = (message.text or "").split()
     target_identifier, _ = _parse_target_and_reason(message, parts[1:])
     if target_identifier is None:
+        if _forwarded_user_missing(message):
+            await message.answer(FORWARD_USER_MISSING_TEXT)
+            return
         await message.answer(
             "Формат: /unmute user_id/@username или ответом на пересланное сообщение."
         )
@@ -494,7 +512,7 @@ async def cmd_unmute(
     )
     if target_id is None:
         await message.answer(
-            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
+            "Не удалось найти пользователя. Если пользователь не писал боту, Telegram не дает получить его ID по @username. Укажите user_id или перешлите сообщение."
         )
         return
 
@@ -583,6 +601,9 @@ async def cmd_warn(
     parts = (message.text or "").split()
     target_identifier, reason = _parse_target_and_reason(message, parts[1:])
     if target_identifier is None:
+        if _forwarded_user_missing(message):
+            await message.answer(FORWARD_USER_MISSING_TEXT)
+            return
         await message.answer(
             "Формат: /warn user_id/@username [причина] или ответом на пересланное сообщение."
         )
@@ -594,7 +615,7 @@ async def cmd_warn(
     )
     if target_id is None:
         await message.answer(
-            "Не удалось найти пользователя. Укажите user_id или перешлите сообщение."
+            "Не удалось найти пользователя. Если пользователь не писал боту, Telegram не дает получить его ID по @username. Укажите user_id или перешлите сообщение."
         )
         return
 

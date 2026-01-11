@@ -11,7 +11,11 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated,
@@ -65,6 +69,47 @@ def _looks_like_target_token(value: str) -> bool:
     return stripped.isdigit() or value.startswith("@") or _looks_like_username(value)
 
 
+def _is_forwarded_message(message: Message) -> bool:
+    if not message.reply_to_message:
+        return False
+    forwarded = message.reply_to_message
+    if getattr(forwarded, "forward_origin", None) is not None:
+        return True
+    return any(
+        getattr(forwarded, name, None)
+        for name in (
+            "forward_from",
+            "forward_from_chat",
+            "forward_sender_name",
+            "forward_signature",
+            "forward_from_message_id",
+            "forward_date",
+        )
+    )
+
+
+def _forwarded_user_id(message: Message) -> int | None:
+    if not message.reply_to_message:
+        return None
+    forwarded = message.reply_to_message
+    forward_from = getattr(forwarded, "forward_from", None)
+    if forward_from:
+        return forward_from.id
+    origin = getattr(forwarded, "forward_origin", None)
+    if origin:
+        sender_user = getattr(origin, "sender_user", None)
+        if sender_user:
+            return sender_user.id
+        sender_user_id = getattr(origin, "sender_user_id", None)
+        if sender_user_id:
+            return sender_user_id
+    return None
+
+
+def _forwarded_user_missing(message: Message) -> bool:
+    return _is_forwarded_message(message) and _forwarded_user_id(message) is None
+
+
 def _parse_target_and_reason(
     message: Message, args: list[str]
 ) -> tuple[int | str | None, str]:
@@ -86,9 +131,10 @@ def _parse_target_and_reason(
                 return int(stripped), reason or "-"
             if _looks_like_target_token(raw_id):
                 return raw_id, reason or "-"
-    if message.reply_to_message and message.reply_to_message.forward_from:
+    forwarded_id = _forwarded_user_id(message)
+    if forwarded_id is not None:
         reason = " ".join(args).strip() if args else "-"
-        return message.reply_to_message.forward_from.id, reason or "-"
+        return forwarded_id, reason or "-"
     if not args:
         return None, ""
     return None, ""
@@ -164,19 +210,25 @@ async def _resolve_user_identifier(
         return None
     if isinstance(identifier, int):
         return identifier
-    username = identifier.lstrip("@")
+    username = identifier.lstrip("@").strip()
     if not username:
         return None
-    try:
-        user = await bot.get_chat(f"@{username}")
-    except TelegramBadRequest:
-        user = None
-    if user:
-        return user.id
+    if username.isdigit():
+        return int(username)
+    for candidate in {username, username.lower()}:
+        if not candidate:
+            continue
+        for chat_ref in (f"@{candidate}", candidate):
+            try:
+                user = await bot.get_chat(chat_ref)
+            except (TelegramBadRequest, TelegramForbiddenError):
+                user = None
+            if user:
+                return user.id
     if sessionmaker:
         async with sessionmaker() as session:
             result = await session.execute(
-                select(User.id).where(User.username == username)
+                select(User.id).where(User.username.in_({username, username.lower()}))
             )
             user_id = result.scalar_one_or_none()
             return user_id
