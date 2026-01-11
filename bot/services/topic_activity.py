@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import html
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -192,8 +192,11 @@ async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> No
             except Exception:
                 pass
             return
+        except TelegramRetryAfter:
+            return
         except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
+            message = str(exc).lower()
+            if "message is not modified" in message:
                 try:
                     await bot.pin_chat_message(
                         TARGET_CHAT_ID,
@@ -203,8 +206,15 @@ async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> No
                 except Exception:
                     pass
                 return
+            recreate_errors = (
+                "message to edit not found",
+                "message can't be edited",
+                "message id is not specified",
+            )
+            if not any(err in message for err in recreate_errors):
+                return
         except Exception:
-            pass
+            return
 
     try:
         sent = await bot.send_message(
