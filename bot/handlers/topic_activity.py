@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from bot.services.topic_activity import (
     TARGET_CHAT_ID,
     TARGET_TOPIC_ID,
+    maybe_update_leaderboard,
     record_topic_message,
 )
 
@@ -27,9 +28,11 @@ async def topic_activity_tracker(
     if message.text and message.text.strip().startswith("/"):
         return
 
-    await record_topic_message(
+    counted = await record_topic_message(
         sessionmaker,
         user_id=message.from_user.id,
         username=message.from_user.username,
         full_name=message.from_user.full_name,
     )
+    if counted:
+        await maybe_update_leaderboard(message.bot, sessionmaker)

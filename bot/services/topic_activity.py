@@ -55,12 +55,20 @@ def _period_label(period_start: datetime | None) -> str:
     return f"с {local_dt.strftime('%d.%m.%Y')}"
 
 
+def _format_update_time(updated_at: datetime) -> str:
+    local_dt = updated_at.astimezone(LEADERBOARD_TZ)
+    return local_dt.strftime("%H:%M")
+
+
 def _build_leaderboard_text(
-    stats: list[TopicActivityStat], period_start: datetime | None
+    stats: list[TopicActivityStat],
+    period_start: datetime | None,
+    updated_at: datetime,
 ) -> str:
     lines = [
         "🏆 <b>Топ активности в теме</b>",
         f"Период: {_period_label(period_start)}",
+        f"Обновлено: {_format_update_time(updated_at)}",
         "",
     ]
     if stats:
@@ -147,6 +155,7 @@ async def record_topic_message(
 
 
 async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> None:
+    now_utc = datetime.now(timezone.utc)
     async with sessionmaker() as session:
         meta = await _get_or_create_meta(session)
         result = await session.execute(
@@ -162,7 +171,9 @@ async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> No
             .limit(MAX_LEADERBOARD)
         )
         stats = result.scalars().all()
-        text = _build_leaderboard_text(stats, meta.period_start)
+        text = _build_leaderboard_text(stats, meta.period_start, now_utc)
+        meta.updated_at = now_utc
+        await session.commit()
 
     if meta.pinned_message_id:
         try:
@@ -224,6 +235,21 @@ async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> No
             .values(pinned_message_id=sent.message_id)
         )
         await session.commit()
+
+
+async def maybe_update_leaderboard(
+    bot,
+    sessionmaker: async_sessionmaker,
+) -> None:
+    """Update the leaderboard if the interval has passed."""
+    now = datetime.now(timezone.utc)
+    async with sessionmaker() as session:
+        meta = await _get_or_create_meta(session)
+        if meta.updated_at:
+            delta = (now - meta.updated_at).total_seconds()
+            if delta < UPDATE_INTERVAL_SECONDS:
+                return
+    await update_pinned_leaderboard(bot, sessionmaker)
 
 
 async def _maybe_award_weekly(bot, sessionmaker: async_sessionmaker) -> None:
