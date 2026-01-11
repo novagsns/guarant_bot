@@ -143,7 +143,7 @@ async def set_role(
 
         user_id = int(parts[1])
         role = parts[2].strip().lower()
-        if role not in {"admin", "moderator", "designer", "guarantor"}:
+        if role not in {"admin", "moderator", "designer", "guarantor", "user"}:
             await message.answer("Неизвестная роль.")
             return
 

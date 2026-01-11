@@ -1207,9 +1207,6 @@ async def vip_broadcast_start(
         sessionmaker: Value for sessionmaker.
     """
     await state.clear()
-    await callback.message.answer("Рассылки отключены.")
-    await callback.answer()
-    return
     async with sessionmaker() as session:
         result = await session.execute(
             select(User).where(User.id == callback.from_user.id)
@@ -1246,8 +1243,6 @@ async def vip_broadcast_text(
         settings: Value for settings.
     """
     await state.clear()
-    await message.answer("Рассылки отключены.")
-    return
     text = (message.text or "").strip()
     if not text:
         await message.answer("Введите текст рассылки.")

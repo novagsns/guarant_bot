@@ -1053,7 +1053,7 @@ async def owner_set_role_value(
             else:
                 user_id = int(target)
 
-        if role not in {"admin", "moderator", "designer", "guarantor"}:
+        if role not in {"admin", "moderator", "designer", "guarantor", "user"}:
             await message.answer("Неизвестная роль.")
             return
 
@@ -2670,9 +2670,6 @@ async def broadcast_approve(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
-    await callback.answer("Рассылки отключены.")
-    await callback.message.answer("Рассылки отключены.")
-    return
     user = await _load_user(sessionmaker, callback.from_user)
     if not _is_moderator(user.role):
         await callback.answer("Нет доступа.")
@@ -2791,8 +2788,6 @@ async def staff_broadcast(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
-    await message.answer("Рассылки отключены.")
-    return
     async with sessionmaker() as session:
         sender = await get_or_create_user(session, message.from_user)
         if not _is_admin(sender.role) and not is_owner(

@@ -122,6 +122,23 @@ async def _ticket_history_text(sessionmaker: async_sessionmaker, ticket_id: int)
     return "\n".join(lines)
 
 
+async def _start_support_dialog(state: FSMContext, message: Message) -> None:
+    await state.clear()
+    await state.set_state(SupportStates.active)
+    await message.answer(
+        "Опишите проблему одним сообщением. Для выхода напишите /exit."
+    )
+
+
+@router.message(F.text == "/support")
+async def support_command(message: Message, state: FSMContext) -> None:
+    """Handle support command."""
+    if message.chat.type != "private":
+        await message.answer("Команда доступна только в ЛС.")
+        return
+    await _start_support_dialog(state, message)
+
+
 @router.callback_query(F.data == "support:start")
 async def support_start(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle support start.
@@ -130,11 +147,7 @@ async def support_start(callback: CallbackQuery, state: FSMContext) -> None:
         callback: Value for callback.
         state: Value for state.
     """
-    await state.clear()
-    await state.set_state(SupportStates.active)
-    await callback.message.answer(
-        "Опишите проблему одним сообщением. Для выхода напишите /exit."
-    )
+    await _start_support_dialog(state, callback.message)
     await callback.answer()
 
 

@@ -20,6 +20,22 @@ from bot.services.ad_alerts import MAX_SUBSCRIPTIONS, create_subscription, delet
 
 router = Router()
 
+PRIVATE_ONLY_TEXT = "Команда доступна только в ЛС."
+
+
+async def _ensure_private_message(message: Message) -> bool:
+    if message.chat.type != "private":
+        await message.answer(PRIVATE_ONLY_TEXT)
+        return False
+    return True
+
+
+async def _ensure_private_callback(callback: CallbackQuery) -> bool:
+    if not callback.message or callback.message.chat.type != "private":
+        await callback.answer(PRIVATE_ONLY_TEXT, show_alert=True)
+        return False
+    return True
+
 
 class AdAlertStates(StatesGroup):
     """Subscription creation states."""
@@ -108,6 +124,8 @@ def _parse_price_input(text: str | None) -> Decimal | None:
 @router.message(Command("alerts"))
 async def alerts_menu(message: Message, sessionmaker: async_sessionmaker) -> None:
     """Show alert subscriptions menu."""
+    if not await _ensure_private_message(message):
+        return
     async with sessionmaker() as session:
         await get_or_create_user(session, message.from_user)
     await _render_subscriptions(message, sessionmaker)
@@ -115,6 +133,8 @@ async def alerts_menu(message: Message, sessionmaker: async_sessionmaker) -> Non
 
 @router.callback_query(F.data == "alert_add")
 async def alert_add(callback: CallbackQuery, state: FSMContext, sessionmaker: async_sessionmaker) -> None:
+    if not await _ensure_private_callback(callback):
+        return
     await state.clear()
     await state.set_state(AdAlertStates.game_id)
     async with sessionmaker() as session:
@@ -137,6 +157,8 @@ async def alert_add(callback: CallbackQuery, state: FSMContext, sessionmaker: as
 async def alert_game_selected(
     callback: CallbackQuery, state: FSMContext
 ) -> None:
+    if not await _ensure_private_callback(callback):
+        return
     raw = callback.data.split(":", 1)[1]
     try:
         game_id = int(raw)
@@ -151,6 +173,8 @@ async def alert_game_selected(
 
 @router.message(AdAlertStates.price_min)
 async def alert_price_min(message: Message, state: FSMContext) -> None:
+    if not await _ensure_private_message(message):
+        return
     value = _parse_price_input(message.text)
     if message.text and value is None and message.text.strip() not in {"0", "-", "нет"}:
         await message.answer("Введите корректную сумму, например 0 или 1500.")
@@ -162,6 +186,8 @@ async def alert_price_min(message: Message, state: FSMContext) -> None:
 
 @router.message(AdAlertStates.price_max)
 async def alert_price_max(message: Message, state: FSMContext) -> None:
+    if not await _ensure_private_message(message):
+        return
     value = _parse_price_input(message.text)
     if message.text and value is None and message.text.strip() not in {"0", "-", "нет"}:
         await message.answer("Введите корректную сумму, например 0 или 1500.")
@@ -183,6 +209,8 @@ async def alert_price_max(message: Message, state: FSMContext) -> None:
 async def alert_server_query(
     message: Message, state: FSMContext, sessionmaker: async_sessionmaker
 ) -> None:
+    if not await _ensure_private_message(message):
+        return
     raw = (message.text or "").strip()
     server_query = None
     if raw and raw not in {"0", "-", "нет"}:
@@ -215,6 +243,8 @@ async def alert_server_query(
 async def alert_delete_menu(
     callback: CallbackQuery, sessionmaker: async_sessionmaker
 ) -> None:
+    if not await _ensure_private_callback(callback):
+        return
     subs = await list_subscriptions(sessionmaker, callback.from_user.id)
     if not subs:
         await callback.message.answer("Подписок нет.")
@@ -242,6 +272,8 @@ async def alert_delete_menu(
 
 @router.callback_query(F.data == "alert_back")
 async def alert_back(callback: CallbackQuery, sessionmaker: async_sessionmaker) -> None:
+    if not await _ensure_private_callback(callback):
+        return
     await _render_subscriptions(callback.message, sessionmaker)
     await callback.answer()
 
@@ -250,6 +282,8 @@ async def alert_back(callback: CallbackQuery, sessionmaker: async_sessionmaker) 
 async def alert_delete(
     callback: CallbackQuery, sessionmaker: async_sessionmaker
 ) -> None:
+    if not await _ensure_private_callback(callback):
+        return
     raw = callback.data.split(":", 1)[1]
     try:
         sub_id = int(raw)
