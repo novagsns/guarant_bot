@@ -18,6 +18,7 @@ from bot.handlers import (
     admin_docs,
     ads,
     chat_moderation,
+    coin_drop,
     deals,
     info,
     profile,
@@ -96,6 +97,7 @@ async def main() -> None:
     dp.include_router(admin_docs.router)
     dp.include_router(chat_moderation.router)
     dp.include_router(moderation_commands.router)
+    dp.include_router(coin_drop.router)
     dp.include_router(ads.router)
     dp.include_router(deals.router)
     dp.include_router(info.router)

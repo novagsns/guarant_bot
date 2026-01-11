@@ -573,6 +573,43 @@ class WeeklyReward(Base):
     )
 
 
+class CoinDrop(Base):
+    """Represent CoinDrop.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        chat_id: Attribute value.
+        topic_id: Attribute value.
+        message_id: Attribute value.
+        created_by: Attribute value.
+        claimed_by: Attribute value.
+        claimed_username: Attribute value.
+        amount: Attribute value.
+        credited: Attribute value.
+        created_at: Attribute value.
+        claimed_at: Attribute value.
+        credited_at: Attribute value.
+    """
+
+    __tablename__ = "coin_drops"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    topic_id: Mapped[int | None] = mapped_column(Integer)
+    message_id: Mapped[int | None] = mapped_column(Integer)
+    created_by: Mapped[int] = mapped_column(BigInteger)
+    claimed_by: Mapped[int | None] = mapped_column(BigInteger)
+    claimed_username: Mapped[str | None] = mapped_column(String(64))
+    amount: Mapped[int | None] = mapped_column(Integer)
+    credited: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    credited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WalletTransaction(Base):
     """Represent WalletTransaction.
 

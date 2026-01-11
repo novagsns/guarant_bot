@@ -71,6 +71,7 @@ async def apply_schema_updates(conn: AsyncConnection, dialect_name: str) -> None
     await _ensure_deal_columns(conn, dialect_name)
     await _ensure_deal_room_table(conn, dialect_name)
     await _ensure_deal_message_table(conn, dialect_name)
+    await _ensure_coin_drop_table(conn, dialect_name)
     await _ensure_dispute_columns(conn, dialect_name)
     await _ensure_review_unique_index(conn, dialect_name)
 
@@ -581,6 +582,67 @@ async def _ensure_deal_message_table(conn: AsyncConnection, dialect_name: str) -
                 "text TEXT,"
                 "file_id VARCHAR(256),"
                 "created_at TIMESTAMPTZ DEFAULT now()"
+                ")"
+            )
+        )
+
+
+async def _ensure_coin_drop_table(conn: AsyncConnection, dialect_name: str) -> None:
+    """Ensure coin_drops table exists."""
+    if dialect_name == "sqlite":
+        result = await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='coin_drops'"
+            )
+        )
+        exists = result.first() is not None
+        if not exists:
+            await conn.execute(
+                text(
+                    "CREATE TABLE coin_drops ("
+                    "id INTEGER PRIMARY KEY,"
+                    "chat_id BIGINT NOT NULL,"
+                    "topic_id INTEGER,"
+                    "message_id INTEGER,"
+                    "created_by BIGINT NOT NULL,"
+                    "claimed_by BIGINT,"
+                    "claimed_username VARCHAR(64),"
+                    "amount INTEGER,"
+                    "credited BOOLEAN DEFAULT 0,"
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    "claimed_at TIMESTAMP,"
+                    "credited_at TIMESTAMP,"
+                    "FOREIGN KEY(created_by) REFERENCES users(id),"
+                    "FOREIGN KEY(claimed_by) REFERENCES users(id)"
+                    ")"
+                )
+            )
+        return
+
+    result = await conn.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'coin_drops'"
+        )
+    )
+    exists = result.first() is not None
+    if not exists:
+        await conn.execute(
+            text(
+                "CREATE TABLE coin_drops ("
+                "id SERIAL PRIMARY KEY,"
+                "chat_id BIGINT NOT NULL,"
+                "topic_id INTEGER,"
+                "message_id INTEGER,"
+                "created_by BIGINT NOT NULL REFERENCES users(id),"
+                "claimed_by BIGINT REFERENCES users(id),"
+                "claimed_username VARCHAR(64),"
+                "amount INTEGER,"
+                "credited BOOLEAN DEFAULT FALSE,"
+                "created_at TIMESTAMPTZ DEFAULT now(),"
+                "claimed_at TIMESTAMPTZ,"
+                "credited_at TIMESTAMPTZ"
                 ")"
             )
         )
