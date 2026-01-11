@@ -95,9 +95,9 @@ async def main() -> None:
     dp.update.outer_middleware(ActionLogMiddleware(sessionmaker))
     dp.update.outer_middleware(AccessMiddleware(sessionmaker, settings))
 
+    dp.include_router(topic_activity.router)
     dp.include_router(start.router)
     dp.include_router(admin_docs.router)
-    dp.include_router(topic_activity.router)
     dp.include_router(chat_moderation.router)
     dp.include_router(moderation_commands.router)
     dp.include_router(coin_drop.router)

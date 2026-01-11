@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -18,10 +18,12 @@ from bot.services.topic_activity import (
 router = Router()
 
 
-@router.message(F.chat.id == TARGET_CHAT_ID)
+@router.message()
 async def topic_activity_tracker(
     message: Message, sessionmaker: async_sessionmaker
 ) -> None:
+    if message.chat.id != TARGET_CHAT_ID:
+        raise SkipHandler
     if message.message_thread_id != TARGET_TOPIC_ID:
         raise SkipHandler
     if not message.from_user or message.from_user.is_bot:
