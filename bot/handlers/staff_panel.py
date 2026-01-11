@@ -564,10 +564,16 @@ async def _load_moderation_chats(
         Return value.
     """
     async with sessionmaker() as session:
+        room_result = await session.execute(select(DealRoom.chat_id))
+        room_ids = {chat_id for chat_id in room_result.scalars().all() if chat_id}
         result = await session.execute(
             select(ModerationChat).order_by(ModerationChat.id.asc())
         )
-        return result.scalars().all()
+        return [
+            chat
+            for chat in result.scalars().all()
+            if chat.chat_id not in room_ids
+        ]
 
 
 def _moderation_chats_text(chats: list[ModerationChat]) -> str:

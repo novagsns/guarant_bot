@@ -618,9 +618,9 @@ async def welcome_new_member(
         return
     if event.chat.type not in {"group", "supergroup"}:
         return
-    if not _is_member_status(event.new_chat_member.status):
+    if event.new_chat_member.status != "member":
         return
-    if _is_member_status(event.old_chat_member.status):
+    if event.old_chat_member.status not in {"left", "kicked"}:
         return
     if not await _is_moderated_chat(sessionmaker, event.chat.id):
         return
