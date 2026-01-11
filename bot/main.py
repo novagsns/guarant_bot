@@ -28,10 +28,12 @@ from bot.handlers import (
     staff_panel,
     start,
     support,
+    topic_activity,
 )
 from bot.handlers.moderation import commands as moderation_commands
 from bot.middlewares import ActionLogMiddleware, AccessMiddleware, ContextMiddleware
 from bot.services.daily_report import daily_report_loop
+from bot.services.topic_activity import topic_activity_loop
 from bot.services.vip_jobs import vip_promotion_loop
 from bot.services.weekly_rewards import weekly_reward_loop
 from bot.utils.send_queue import SendQueue
@@ -107,10 +109,12 @@ async def main() -> None:
     dp.include_router(staff.router)
     dp.include_router(staff_panel.router)
     dp.include_router(support.router)
+    dp.include_router(topic_activity.router)
 
     asyncio.create_task(daily_report_loop(bot, sessionmaker, settings))
     asyncio.create_task(vip_promotion_loop(sessionmaker))
     asyncio.create_task(weekly_reward_loop(bot, sessionmaker, settings))
+    asyncio.create_task(topic_activity_loop(bot, sessionmaker))
     await dp.start_polling(bot)
 
 

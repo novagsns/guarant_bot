@@ -610,6 +610,108 @@ class CoinDrop(Base):
     credited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TopicActivityMeta(Base):
+    """Represent TopicActivityMeta.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        chat_id: Attribute value.
+        topic_id: Attribute value.
+        pinned_message_id: Attribute value.
+        period_start: Attribute value.
+        last_reward_at: Attribute value.
+        updated_at: Attribute value.
+    """
+
+    __tablename__ = "topic_activity_meta"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "topic_id", name="uq_topic_activity_meta"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    topic_id: Mapped[int] = mapped_column(Integer)
+    pinned_message_id: Mapped[int | None] = mapped_column(Integer)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reward_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TopicActivityStat(Base):
+    """Represent TopicActivityStat.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        chat_id: Attribute value.
+        topic_id: Attribute value.
+        user_id: Attribute value.
+        username: Attribute value.
+        full_name: Attribute value.
+        message_count: Attribute value.
+        last_counted_at: Attribute value.
+        created_at: Attribute value.
+        updated_at: Attribute value.
+    """
+
+    __tablename__ = "topic_activity_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "chat_id",
+            "topic_id",
+            "user_id",
+            name="uq_topic_activity_stat",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    topic_id: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    username: Mapped[str | None] = mapped_column(String(64))
+    full_name: Mapped[str | None] = mapped_column(String(128))
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_counted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TopicActivityReward(Base):
+    """Represent TopicActivityReward.
+
+    Attributes:
+        __tablename__: Attribute value.
+        id: Attribute value.
+        chat_id: Attribute value.
+        topic_id: Attribute value.
+        user_id: Attribute value.
+        amount: Attribute value.
+        status: Attribute value.
+        period_start: Attribute value.
+        created_at: Attribute value.
+        granted_at: Attribute value.
+    """
+
+    __tablename__ = "topic_activity_rewards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    topic_id: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    amount: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WalletTransaction(Base):
     """Represent WalletTransaction.
 

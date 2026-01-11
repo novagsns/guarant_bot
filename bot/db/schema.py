@@ -71,6 +71,7 @@ async def apply_schema_updates(conn: AsyncConnection, dialect_name: str) -> None
     await _ensure_deal_columns(conn, dialect_name)
     await _ensure_deal_room_table(conn, dialect_name)
     await _ensure_deal_message_table(conn, dialect_name)
+    await _ensure_topic_activity_tables(conn, dialect_name)
     await _ensure_coin_drop_table(conn, dialect_name)
     await _ensure_dispute_columns(conn, dialect_name)
     await _ensure_review_unique_index(conn, dialect_name)
@@ -582,6 +583,159 @@ async def _ensure_deal_message_table(conn: AsyncConnection, dialect_name: str) -
                 "text TEXT,"
                 "file_id VARCHAR(256),"
                 "created_at TIMESTAMPTZ DEFAULT now()"
+                ")"
+            )
+        )
+
+
+async def _ensure_topic_activity_tables(
+    conn: AsyncConnection, dialect_name: str
+) -> None:
+    """Ensure topic activity tables exist."""
+    if dialect_name == "sqlite":
+        result = await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='topic_activity_meta'"
+            )
+        )
+        exists = result.first() is not None
+        if not exists:
+            await conn.execute(
+                text(
+                    "CREATE TABLE topic_activity_meta ("
+                    "id INTEGER PRIMARY KEY,"
+                    "chat_id BIGINT NOT NULL,"
+                    "topic_id INTEGER NOT NULL,"
+                    "pinned_message_id INTEGER,"
+                    "period_start TIMESTAMP,"
+                    "last_reward_at TIMESTAMP,"
+                    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    "UNIQUE(chat_id, topic_id)"
+                    ")"
+                )
+            )
+
+        result = await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='topic_activity_stats'"
+            )
+        )
+        exists = result.first() is not None
+        if not exists:
+            await conn.execute(
+                text(
+                    "CREATE TABLE topic_activity_stats ("
+                    "id INTEGER PRIMARY KEY,"
+                    "chat_id BIGINT NOT NULL,"
+                    "topic_id INTEGER NOT NULL,"
+                    "user_id BIGINT NOT NULL,"
+                    "username VARCHAR(64),"
+                    "full_name VARCHAR(128),"
+                    "message_count INTEGER DEFAULT 0,"
+                    "last_counted_at TIMESTAMP,"
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    "updated_at TIMESTAMP,"
+                    "UNIQUE(chat_id, topic_id, user_id)"
+                    ")"
+                )
+            )
+
+        result = await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='topic_activity_rewards'"
+            )
+        )
+        exists = result.first() is not None
+        if not exists:
+            await conn.execute(
+                text(
+                    "CREATE TABLE topic_activity_rewards ("
+                    "id INTEGER PRIMARY KEY,"
+                    "chat_id BIGINT NOT NULL,"
+                    "topic_id INTEGER NOT NULL,"
+                    "user_id BIGINT NOT NULL,"
+                    "amount INTEGER NOT NULL,"
+                    "status VARCHAR(16) DEFAULT 'pending',"
+                    "period_start TIMESTAMP,"
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    "granted_at TIMESTAMP"
+                    ")"
+                )
+            )
+        return
+
+    result = await conn.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'topic_activity_meta'"
+        )
+    )
+    exists = result.first() is not None
+    if not exists:
+        await conn.execute(
+            text(
+                "CREATE TABLE topic_activity_meta ("
+                "id SERIAL PRIMARY KEY,"
+                "chat_id BIGINT NOT NULL,"
+                "topic_id INTEGER NOT NULL,"
+                "pinned_message_id INTEGER,"
+                "period_start TIMESTAMPTZ,"
+                "last_reward_at TIMESTAMPTZ,"
+                "updated_at TIMESTAMPTZ DEFAULT now(),"
+                "UNIQUE(chat_id, topic_id)"
+                ")"
+            )
+        )
+
+    result = await conn.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'topic_activity_stats'"
+        )
+    )
+    exists = result.first() is not None
+    if not exists:
+        await conn.execute(
+            text(
+                "CREATE TABLE topic_activity_stats ("
+                "id SERIAL PRIMARY KEY,"
+                "chat_id BIGINT NOT NULL,"
+                "topic_id INTEGER NOT NULL,"
+                "user_id BIGINT NOT NULL,"
+                "username VARCHAR(64),"
+                "full_name VARCHAR(128),"
+                "message_count INTEGER DEFAULT 0,"
+                "last_counted_at TIMESTAMPTZ,"
+                "created_at TIMESTAMPTZ DEFAULT now(),"
+                "updated_at TIMESTAMPTZ,"
+                "UNIQUE(chat_id, topic_id, user_id)"
+                ")"
+            )
+        )
+
+    result = await conn.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'topic_activity_rewards'"
+        )
+    )
+    exists = result.first() is not None
+    if not exists:
+        await conn.execute(
+            text(
+                "CREATE TABLE topic_activity_rewards ("
+                "id SERIAL PRIMARY KEY,"
+                "chat_id BIGINT NOT NULL,"
+                "topic_id INTEGER NOT NULL,"
+                "user_id BIGINT NOT NULL,"
+                "amount INTEGER NOT NULL,"
+                "status VARCHAR(16) DEFAULT 'pending',"
+                "period_start TIMESTAMPTZ,"
+                "created_at TIMESTAMPTZ DEFAULT now(),"
+                "granted_at TIMESTAMPTZ"
                 ")"
             )
         )

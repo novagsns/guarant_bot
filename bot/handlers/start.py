@@ -30,6 +30,7 @@ from bot.keyboards.common import (
 )
 from bot.services.fees import calculate_fee
 from bot.services.coin_drops import grant_pending_coin_drops
+from bot.services.topic_activity import grant_pending_topic_rewards
 from bot.services.trust import apply_trust_event, get_trust_score
 from bot.services.trade_bonus import get_trade_level
 from bot.services.weekly_rewards import grant_pending_rewards
@@ -371,6 +372,7 @@ async def cmd_start(
     )
     await grant_pending_rewards(message.bot, sessionmaker, message.from_user.id)
     await grant_pending_coin_drops(message.bot, sessionmaker, message.from_user.id)
+    await grant_pending_topic_rewards(message.bot, sessionmaker, message.from_user.id)
 
 
 @router.message(F.text == "/id")

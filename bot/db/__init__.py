@@ -19,6 +19,9 @@ from bot.db.models import (
     SupportMessage,
     SupportTicket,
     TopUp,
+    TopicActivityMeta,
+    TopicActivityReward,
+    TopicActivityStat,
     User,
     WalletTransaction,
 )
@@ -42,6 +45,9 @@ __all__ = [
     "RouletteSpin",
     "StaffTask",
     "TopUp",
+    "TopicActivityMeta",
+    "TopicActivityReward",
+    "TopicActivityStat",
     "User",
     "WalletTransaction",
 ]
