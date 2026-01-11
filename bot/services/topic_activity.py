@@ -172,9 +172,25 @@ async def update_pinned_leaderboard(bot, sessionmaker: async_sessionmaker) -> No
                 text=text,
                 parse_mode="HTML",
             )
+            try:
+                await bot.pin_chat_message(
+                    TARGET_CHAT_ID,
+                    meta.pinned_message_id,
+                    message_thread_id=TARGET_TOPIC_ID,
+                )
+            except Exception:
+                pass
             return
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc).lower():
+                try:
+                    await bot.pin_chat_message(
+                        TARGET_CHAT_ID,
+                        meta.pinned_message_id,
+                        message_thread_id=TARGET_TOPIC_ID,
+                    )
+                except Exception:
+                    pass
                 return
         except Exception:
             pass
