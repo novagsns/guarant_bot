@@ -187,7 +187,7 @@ def _format_tg_user(user) -> str:
     return str(user.id)
 
 
-def _normalize_reason(reason: str | None) -> str:
+def _normalize_reason(reason: str | None, *, max_len: int | None = None) -> str:
     """Обрабатывает normalize reason.
 
     Аргументы:
@@ -201,6 +201,12 @@ def _normalize_reason(reason: str | None) -> str:
     clean = reason.strip()
     if not clean or clean == "-":
         return "Причина не указана"
+    if max_len is not None and max_len > 0 and len(clean) > max_len:
+        suffix = "..."
+        if max_len <= len(suffix):
+            clean = clean[:max_len]
+        else:
+            clean = clean[: max_len - len(suffix)].rstrip() + suffix
     return clean
 
 
@@ -273,7 +279,7 @@ async def _upsert_restriction(
         )
     )
     record = result.scalar_one_or_none()
-    normalized = _normalize_reason(reason)
+    normalized = _normalize_reason(reason, max_len=255)
     if record:
         record.reason = normalized
         record.until_date = until_date

@@ -16,6 +16,7 @@ from bot.db.schema import prepare_database
 from bot.db.session import create_engine, create_sessionmaker
 from bot.handlers import (
     admin_docs,
+    ad_alerts,
     ads,
     chat_moderation,
     coin_drop,
@@ -96,6 +97,7 @@ async def main() -> None:
     dp.update.outer_middleware(AccessMiddleware(sessionmaker, settings))
 
     dp.include_router(topic_activity.router)
+    dp.include_router(ad_alerts.router)
     dp.include_router(start.router)
     dp.include_router(admin_docs.router)
     dp.include_router(chat_moderation.router)

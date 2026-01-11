@@ -67,6 +67,7 @@ from bot.keyboards.staff import (
 )
 from bot.keyboards.chat_moderation import chat_moderation_kb
 from bot.services.fees import calculate_fee
+from bot.services.ad_alerts import notify_ad_alerts_for_ad
 from bot.services.trade_bonus import get_trade_level
 from bot.services.daily_report import send_daily_report
 from bot.services.trust import (
@@ -1294,6 +1295,7 @@ async def mod_approve(
         if not ad:
             await callback.answer("Объявление не найдено.")
             return
+        already_approved = ad.moderation_status == "approved"
         ad.moderation_status = "approved"
         ad.moderation_reason = None
         await session.commit()
@@ -1325,6 +1327,10 @@ async def mod_approve(
             if description:
                 text += f"\n📜 Описание:\n{description}"
     await callback.message.answer("Объявление одобрено.")
+    if not already_approved:
+        asyncio.create_task(
+            notify_ad_alerts_for_ad(callback.bot, sessionmaker, ad_id)
+        )
     await _log_admin(
         callback.bot,
         settings,
