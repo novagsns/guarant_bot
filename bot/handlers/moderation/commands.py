@@ -7,13 +7,17 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from aiogram.types import ChatPermissions, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.config import Settings
-from bot.db.models import ModerationWarn
+from bot.db.models import ModerationChat, ModerationWarn
 from bot.handlers.chat_moderation import (
     _deactivate_restriction,
     _format_tg_user,
@@ -39,6 +43,36 @@ FORWARD_USER_MISSING_TEXT = (
     "Не удалось определить автора пересланного сообщения. "
     "Укажите user_id/@username."
 )
+
+
+def _format_action_error(exc: Exception) -> str:
+    text = str(exc)
+    lowered = text.lower()
+    if "not enough rights" in lowered or "rights" in lowered:
+        return "нет прав у бота"
+    if "user is an administrator" in lowered or "chat_admin" in lowered:
+        return "пользователь админ"
+    if "can't remove chat owner" in lowered:
+        return "нельзя банить владельца"
+    if "user not found" in lowered:
+        return "пользователь не найден"
+    if "member list is inaccessible" in lowered:
+        return "нет доступа к списку участников"
+    return text[:160]
+
+
+async def _load_chat_titles(
+    sessionmaker: async_sessionmaker, chat_ids: list[int]
+) -> dict[int, str]:
+    if not chat_ids:
+        return {}
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(ModerationChat.chat_id, ModerationChat.title).where(
+                ModerationChat.chat_id.in_(set(chat_ids))
+            )
+        )
+        return {row[0]: row[1] for row in result.all() if row and row[0]}
 
 
 @router.message(F.text == "/mod_chat_add")
@@ -128,7 +162,7 @@ async def cmd_ban(
     multi_chat = len(chat_ids) > 1
 
     success_ids: list[int] = []
-    failed_ids: list[int] = []
+    failed_details: list[tuple[int, str]] = []
     for chat_id in chat_ids:
         try:
             await message.bot.ban_chat_member(chat_id, target_id)
@@ -136,14 +170,18 @@ async def cmd_ban(
             await asyncio.sleep(exc.retry_after)
             try:
                 await message.bot.ban_chat_member(chat_id, target_id)
-            except Exception:
-                failed_ids.append(chat_id)
+            except Exception as retry_exc:
+                failed_details.append((chat_id, _format_action_error(retry_exc)))
                 continue
-        except Exception:
-            failed_ids.append(chat_id)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            failed_details.append((chat_id, _format_action_error(exc)))
+            continue
+        except Exception as exc:
+            failed_details.append((chat_id, _format_action_error(exc)))
             continue
         success_ids.append(chat_id)
 
+    failed_ids = [chat_id for chat_id, _ in failed_details]
     if not success_ids:
         await message.answer("Не удалось забанить пользователя.")
         return
@@ -207,6 +245,13 @@ async def cmd_ban(
     summary = f"Пользователь забанен. Успешно: {len(success_ids)}"
     if failed_ids:
         summary += f", ошибки: {len(failed_ids)}."
+        chat_titles = await _load_chat_titles(sessionmaker, failed_ids)
+        details = [
+            f"- {chat_titles.get(chat_id) or chat_id}: {reason}"
+            for chat_id, reason in failed_details
+        ]
+        if details:
+            summary += "\n" + "Проблемные чаты:\n" + "\n".join(details)
     await message.answer(summary)
 
 
