@@ -106,13 +106,16 @@ async def _build_review_page(
     limit = per_page + 1
     offset = (page - 1) * per_page
     async with sessionmaker() as session:
+        guarantor = aliased(User)
         result = await session.execute(
             select(Review, Deal, User)
             .join(Deal, Deal.id == Review.deal_id)
             .join(User, User.id == Review.author_id)
+            .join(guarantor, guarantor.id == Deal.guarantee_id)
             .where(
                 Review.status == "active",
                 Deal.guarantee_id.is_not(None),
+                guarantor.role == "guarantor",
             )
             .order_by(Deal.id.desc(), Review.id.asc())
             .limit(limit)

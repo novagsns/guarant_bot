@@ -376,6 +376,15 @@ async def _ensure_support_ticket_columns(
         await conn.execute(
             text("ALTER TABLE support_tickets ADD COLUMN last_message TEXT")
         )
+    if "assignee_id" not in columns:
+        if dialect_name == "sqlite":
+            await conn.execute(
+                text("ALTER TABLE support_tickets ADD COLUMN assignee_id INTEGER")
+            )
+        else:
+            await conn.execute(
+                text("ALTER TABLE support_tickets ADD COLUMN assignee_id BIGINT")
+            )
 
 
 async def _ensure_ad_account_columns(conn: AsyncConnection, dialect_name: str) -> None:

@@ -377,7 +377,7 @@ async def _send_ads(
         ad_kind: Value for ad_kind.
     """
     page = max(page, 1)
-    per_page = 5
+    per_page = 1
     filters = [
         Ad.active.is_(True),
         Ad.moderation_status == "approved",

@@ -2435,6 +2435,10 @@ async def deal_close_yes(
                         description=f"Сделка #{deal.id}",
                     )
                 )
+        if deal.ad_id:
+            ad = await session.get(Ad, deal.ad_id)
+            if ad and ad.active and ad.ad_kind == "sale":
+                ad.active = False
         await session.commit()
     await callback.message.answer(f"Сделка #{deal_id} закрыта.")
     review_kb = InlineKeyboardMarkup(

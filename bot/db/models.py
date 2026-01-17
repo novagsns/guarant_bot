@@ -837,6 +837,7 @@ class SupportTicket(Base):
         __tablename__: Attribute value.
         id: Attribute value.
         user_id: Attribute value.
+        assignee_id: Attribute value.
         status: Attribute value.
         last_message: Attribute value.
         created_at: Attribute value.
@@ -846,6 +847,7 @@ class SupportTicket(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(16), default="open")
     last_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

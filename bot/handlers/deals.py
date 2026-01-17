@@ -1979,6 +1979,135 @@ async def open_chat(
     await callback.answer()
 
 
+@router.message(Command("chat"))
+async def chat_command(message: Message, sessionmaker: async_sessionmaker) -> None:
+    """Handle /chat command for deal room access or controls."""
+    if message.chat.type in {"group", "supergroup"}:
+        if not message.from_user:
+            return
+        async with sessionmaker() as session:
+            result = await session.execute(
+                select(DealRoom).where(
+                    DealRoom.chat_id == message.chat.id,
+                    DealRoom.assigned_deal_id.is_not(None),
+                )
+            )
+            room = result.scalar_one_or_none()
+            deal = None
+            if room and room.assigned_deal_id:
+                deal = await session.get(Deal, room.assigned_deal_id)
+            if not deal:
+                result = await session.execute(
+                    select(Deal).where(Deal.room_chat_id == message.chat.id)
+                )
+                deal = result.scalar_one_or_none()
+
+        if not deal:
+            await message.answer("\u042d\u0442\u043e \u043d\u0435 \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u0441\u0434\u0435\u043b\u043a\u0438.")
+            return
+        if deal.status in {"closed", "canceled"}:
+            await message.answer("\u0421\u0434\u0435\u043b\u043a\u0430 \u0443\u0436\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0430.")
+            return
+        if message.from_user.id != deal.guarantee_id:
+            await message.answer("\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0433\u0430\u0440\u0430\u043d\u0442\u0443.")
+            return
+        await message.answer(
+            f"\u041f\u0430\u043d\u0435\u043b\u044c \u0433\u0430\u0440\u0430\u043d\u0442\u0430 \u043f\u043e \u0441\u0434\u0435\u043b\u043a\u0435 #{deal.id}:",
+            reply_markup=deal_room_guarantor_kb(deal.id),
+        )
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435: /chat DEAL_ID")
+        return
+    deal_id = int(parts[1])
+
+    deal, role, error = await _resolve_deal_chat(
+        sessionmaker, deal_id, message.from_user.id
+    )
+    if error:
+        await message.answer(error)
+        return
+
+    deal, invite_link = await _prepare_room_for_deal(
+        message.bot, sessionmaker, deal
+    )
+    if not deal:
+        await message.answer("\u0421\u0434\u0435\u043b\u043a\u0430 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430.")
+        return
+    if invite_link and deal.room_ready:
+        await message.answer(
+            f"\u0427\u0430\u0442 \u0433\u043e\u0442\u043e\u0432:\n{invite_link}",
+            reply_markup=_deal_room_invite_kb(invite_link),
+        )
+        if deal.room_chat_id:
+            try:
+                await _send_deal_room_intro(
+                    message.bot,
+                    sessionmaker,
+                    deal=deal,
+                    role=role,
+                    chat_id=deal.room_chat_id,
+                )
+            except Exception:
+                pass
+        return
+
+    if not deal.room_chat_id:
+        await message.answer("\u0427\u0430\u0442 \u0434\u043b\u044f \u0441\u0434\u0435\u043b\u043a\u0438 \u0435\u0449\u0435 \u043d\u0435 \u043d\u0430\u0437\u043d\u0430\u0447\u0435\u043d.")
+        return
+
+    invite_link = deal.room_invite_link
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(DealRoom).where(DealRoom.chat_id == deal.room_chat_id)
+        )
+        room = result.scalar_one_or_none()
+        if room and not room.invite_link:
+            try:
+                invite = await message.bot.create_chat_invite_link(
+                    deal.room_chat_id,
+                    name="GSNS deal room",
+                )
+                room.invite_link = invite.invite_link
+                deal.room_invite_link = invite.invite_link
+                invite_link = invite.invite_link
+                await session.commit()
+            except Exception:
+                pass
+        elif room and room.invite_link:
+            invite_link = room.invite_link
+
+    if not invite_link:
+        await message.answer(
+            "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0438\u043d\u0432\u0430\u0439\u0442 \u0432 \u043a\u043e\u043c\u043d\u0430\u0442\u0443. "
+            "\u0411\u043e\u0442 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u0430\u0434\u043c\u0438\u043d\u043e\u043c."
+        )
+        return
+
+    if role == "guarantor" and invite_link:
+        await _mark_room_ready_and_notify(
+            message.bot,
+            sessionmaker,
+            deal_id=deal.id,
+            invite_link=invite_link,
+        )
+        await _send_deal_room_intro(
+            message.bot,
+            sessionmaker,
+            deal=deal,
+            role="guarantor",
+            chat_id=deal.room_chat_id,
+        )
+        return
+
+    await message.answer(
+        "\u0427\u0430\u0442 \u0435\u0449\u0435 \u043d\u0435 \u0433\u043e\u0442\u043e\u0432. "
+        "\u0414\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c, \u043f\u043e\u043a\u0430 \u0433\u0430\u0440\u0430\u043d\u0442 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0441\u044f \u043a \u043a\u043e\u043c\u043d\u0430\u0442\u0435."
+    )
+
+
 @router.message(F.text == "/deals")
 async def list_active_deals(message: Message, sessionmaker: async_sessionmaker) -> None:
     """List active deals for quick chat access."""
@@ -2240,6 +2369,10 @@ async def guarantor_reviews(
         guarantor = result.scalar_one_or_none()
         if not guarantor:
             await callback.answer("Гарант не найден.")
+            return
+        if guarantor.role != "guarantor":
+            await callback.message.answer("Отзывы гаранта скрыты.")
+            await callback.answer()
             return
 
         author = aliased(User)

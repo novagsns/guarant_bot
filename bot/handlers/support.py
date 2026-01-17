@@ -82,18 +82,28 @@ def _is_moderator(role: str) -> bool:
     return role in {"owner", "admin", "moderator"}
 
 
-async def _load_moderators(sessionmaker: async_sessionmaker) -> list[User]:
-    """Handle load moderators.
-
-    Args:
-        sessionmaker: Value for sessionmaker.
-
-    Returns:
-        Return value.
-    """
+async def _load_support_recipients(
+    sessionmaker: async_sessionmaker, settings: Settings
+) -> list[int]:
+    """Load support recipients (moderators + owners)."""
+    ids: set[int] = set(settings.owner_ids or [])
     async with sessionmaker() as session:
-        result = await session.execute(select(User).where(User.role == "moderator"))
-        return result.scalars().all()
+        result = await session.execute(select(User.id).where(User.role == "moderator"))
+        ids.update(result.scalars().all())
+        result = await session.execute(select(User.id).where(User.role == "owner"))
+        ids.update(result.scalars().all())
+    return sorted(ids)
+
+
+def _assignee_label(user: User | None, fallback_id: int | None) -> str:
+    """Format a readable assignee label."""
+    if user and user.username:
+        return f"@{user.username}"
+    if user:
+        return str(user.id)
+    if fallback_id is not None:
+        return str(fallback_id)
+    return "-"
 
 
 async def _ticket_history_text(sessionmaker: async_sessionmaker, ticket_id: int) -> str:
@@ -210,39 +220,42 @@ async def support_message(
         )
         await session.commit()
 
-    moderators = await _load_moderators(sessionmaker)
+    recipient_ids = await _load_support_recipients(sessionmaker, settings)
     user_label = f"{user.id} (@{user.username})" if user.username else str(user.id)
     text = (
         f"🆘 Тикет #{ticket.id}\n"
         f"👤 Пользователь: {user_label}\n"
         f"📝 Сообщение: {message.text or '[вложение]'}"
     )
-    for mod in moderators:
-        if message.photo:
-            await message.bot.send_photo(
-                mod.id,
-                message.photo[-1].file_id,
-                caption=text,
-                reply_markup=_reply_kb(ticket.id),
-            )
-        elif message.video:
-            await message.bot.send_video(
-                mod.id,
-                message.video.file_id,
-                caption=text,
-                reply_markup=_reply_kb(ticket.id),
-            )
-        elif message.document:
-            await message.bot.send_document(
-                mod.id,
-                message.document.file_id,
-                caption=text,
-                reply_markup=_reply_kb(ticket.id),
-            )
-        else:
-            await message.bot.send_message(
-                mod.id, text, reply_markup=_reply_kb(ticket.id)
-            )
+    for recipient_id in recipient_ids:
+        try:
+            if message.photo:
+                await message.bot.send_photo(
+                    recipient_id,
+                    message.photo[-1].file_id,
+                    caption=text,
+                    reply_markup=_reply_kb(ticket.id),
+                )
+            elif message.video:
+                await message.bot.send_video(
+                    recipient_id,
+                    message.video.file_id,
+                    caption=text,
+                    reply_markup=_reply_kb(ticket.id),
+                )
+            elif message.document:
+                await message.bot.send_document(
+                    recipient_id,
+                    message.document.file_id,
+                    caption=text,
+                    reply_markup=_reply_kb(ticket.id),
+                )
+            else:
+                await message.bot.send_message(
+                    recipient_id, text, reply_markup=_reply_kb(ticket.id)
+                )
+        except Exception:
+            continue
 
     await message.answer("✅ Обращение отправлено в поддержку.")
 
@@ -262,6 +275,7 @@ async def support_reply_start(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
+    ticket_id = int(callback.data.split(":")[1])
     async with sessionmaker() as session:
         user = await get_or_create_user(session, callback.from_user)
         if not _is_moderator(user.role) and not is_owner(
@@ -269,8 +283,21 @@ async def support_reply_start(
         ):
             await callback.answer("Нет доступа.")
             return
-
-    ticket_id = int(callback.data.split(":")[1])
+        result = await session.execute(
+            select(SupportTicket).where(SupportTicket.id == ticket_id)
+        )
+        ticket = result.scalar_one_or_none()
+        if not ticket or ticket.status != "open":
+            await callback.answer("Тикет не найден или закрыт.")
+            return
+        if ticket.assignee_id and ticket.assignee_id != user.id:
+            assignee = await session.get(User, ticket.assignee_id)
+            label = _assignee_label(assignee, ticket.assignee_id)
+            await callback.answer(f"Тикет уже в работе у {label}.")
+            return
+        if ticket.assignee_id is None:
+            ticket.assignee_id = user.id
+            await session.commit()
     await state.update_data(ticket_id=ticket_id)
     await state.set_state(SupportReplyStates.waiting)
     await callback.message.answer(f"Ответ на тикет #{ticket_id}. Напишите сообщение.")
@@ -314,6 +341,14 @@ async def support_reply_send(
             await message.answer("Тикет не найден или закрыт.")
             await state.clear()
             return
+        if ticket.assignee_id and ticket.assignee_id != user.id:
+            assignee = await session.get(User, ticket.assignee_id)
+            label = _assignee_label(assignee, ticket.assignee_id)
+            await message.answer(f"Тикет уже в работе у {label}.")
+            await state.clear()
+            return
+        if ticket.assignee_id is None:
+            ticket.assignee_id = user.id
         media_type = None
         file_id = None
         if message.photo:
@@ -420,6 +455,7 @@ async def support_close_btn(
             await callback.answer("Тикет не найден.")
             return
         ticket.status = "closed"
+        ticket.assignee_id = None
         await session.commit()
 
     await _send_ticket_to_admin_chat(callback.bot, sessionmaker, settings, ticket_id)
@@ -460,6 +496,7 @@ async def support_close(
             await message.answer("Тикет не найден.")
             return
         ticket.status = "closed"
+        ticket.assignee_id = None
         await session.commit()
 
     await _send_ticket_to_admin_chat(message.bot, sessionmaker, settings, ticket_id)
