@@ -110,6 +110,14 @@ async def _reset_postgres_sequences(dest_conn: AsyncConnection) -> None:
         )
 
 
+async def _get_sqlite_tables(src_conn: AsyncConnection) -> set[str]:
+    """Fetch table names from the SQLite source."""
+    result = await src_conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table'")
+    )
+    return {row[0] for row in result.fetchall()}
+
+
 async def migrate(sqlite_url: str, postgres_url: str, *, truncate: bool) -> None:
     """Copy data from SQLite to Postgres using ORM metadata."""
     await _create_schema(postgres_url, drop_existing=truncate)
@@ -117,11 +125,15 @@ async def migrate(sqlite_url: str, postgres_url: str, *, truncate: bool) -> None
     dest_engine = create_async_engine(postgres_url)
 
     async with src_engine.connect() as src_conn:
+        src_tables = await _get_sqlite_tables(src_conn)
         if truncate:
             async with dest_engine.begin() as dest_conn:
                 await _truncate_tables(dest_conn)
 
         for table in Base.metadata.sorted_tables:
+            if table.name not in src_tables:
+                print(f"Skipping missing table: {table.name}")
+                continue
             print(f"Copying {table.name}...")
             try:
                 async with dest_engine.begin() as dest_conn:
