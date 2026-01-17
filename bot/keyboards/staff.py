@@ -15,36 +15,26 @@ def owner_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="👑 Управление персоналом", callback_data="owner:staff"
+                    text="?? ?????????? ??????????", callback_data="owner:staff"
                 ),
-                InlineKeyboardButton(text="🧩 Роли", callback_data="owner:roles"),
+                InlineKeyboardButton(text="?? ????", callback_data="owner:roles"),
             ],
             [
                 InlineKeyboardButton(
-                    text="🛡 Модерация", callback_data="owner:moderation"
+                    text="?? ?????????", callback_data="owner:moderation"
                 ),
-                InlineKeyboardButton(text="⚖ Споры", callback_data="owner:disputes"),
+                InlineKeyboardButton(text="? ?????", callback_data="owner:disputes"),
             ],
             [
-                InlineKeyboardButton(text="⭐ Отзывы", callback_data="owner:reviews"),
+                InlineKeyboardButton(text="? ??????", callback_data="owner:reviews"),
                 InlineKeyboardButton(
-                    text="🧾 Задачи дизайнеру", callback_data="owner:design_tasks"
+                    text="?? ?????? ?????????", callback_data="owner:design_tasks"
                 ),
             ],
+            [InlineKeyboardButton(text="?? Trust Score", callback_data="owner:trust")],
             [
                 InlineKeyboardButton(
-                    text="🧿 Модерация чатов", callback_data="owner:chat_moderation"
-                )
-            ],
-            [InlineKeyboardButton(text="🧭 Trust Score", callback_data="owner:trust")],
-            [
-                InlineKeyboardButton(
-                    text="🚫 База скамеров", callback_data="scammers:menu"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⛔ ЧС модерации", callback_data="mod_blacklist:menu"
+                    text="?? ???? ????????", callback_data="scammers:menu"
                 )
             ],
         ]
@@ -61,14 +51,14 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🛡 Модерация", callback_data="owner:moderation"
+                    text="?? ?????????", callback_data="owner:moderation"
                 ),
-                InlineKeyboardButton(text="⚖ Споры", callback_data="owner:disputes"),
+                InlineKeyboardButton(text="? ?????", callback_data="owner:disputes"),
             ],
             [
-                InlineKeyboardButton(text="⭐ Отзывы", callback_data="owner:reviews"),
+                InlineKeyboardButton(text="? ??????", callback_data="owner:reviews"),
                 InlineKeyboardButton(
-                    text="🧾 Задачи дизайнеру", callback_data="owner:design_tasks"
+                    text="?? ?????? ?????????", callback_data="owner:design_tasks"
                 ),
             ],
         ]
@@ -84,24 +74,24 @@ def guarantor_panel_kb(on_shift: bool) -> InlineKeyboardMarkup:
     Returns:
         Return value.
     """
-    shift_label = "🟢 На смене" if on_shift else "⚪ Не на смене"
+    shift_label = "?? ?? ?????" if on_shift else "? ?? ?? ?????"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🧾 Мои сделки", callback_data="guarantor:deals"
+                    text="?? ??? ??????", callback_data="guarantor:deals"
                 ),
                 InlineKeyboardButton(
-                    text="⭐ Мои отзывы", callback_data="guarantor:reviews"
+                    text="? ??? ??????", callback_data="guarantor:reviews"
                 ),
             ],
             [
-                InlineKeyboardButton(text="⚖ Спор", callback_data="guarantor:dispute"),
+                InlineKeyboardButton(text="? ????", callback_data="guarantor:dispute"),
                 InlineKeyboardButton(text=shift_label, callback_data="guarantor:shift"),
             ],
             [
                 InlineKeyboardButton(
-                    text="🔎 Проверка пользователя", callback_data="guarantor:check"
+                    text="?? ???????? ????????????", callback_data="guarantor:check"
                 )
             ],
         ]
@@ -118,20 +108,15 @@ def moderator_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🧹 Модерация объявлений", callback_data="moderator:ads"
+                    text="?? ????????? ??????????", callback_data="moderator:ads"
                 ),
                 InlineKeyboardButton(
-                    text="📬 Жалобы", callback_data="moderator:complaints"
+                    text="?? ??????", callback_data="moderator:complaints"
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🚫 База скамеров", callback_data="scammers:menu"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⛔ ЧС модерации", callback_data="mod_blacklist:menu"
+                    text="?? ???? ????????", callback_data="scammers:menu"
                 )
             ],
         ]
@@ -146,7 +131,7 @@ def designer_panel_kb() -> InlineKeyboardMarkup:
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🧾 Задачи", callback_data="designer:tasks")]
+            [InlineKeyboardButton(text="?? ??????", callback_data="designer:tasks")]
         ]
     )
 
@@ -161,10 +146,10 @@ def staff_manage_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Назначить роль", callback_data="owner:set_role"
+                    text="????????? ????", callback_data="owner:set_role"
                 ),
                 InlineKeyboardButton(
-                    text="Список персонала", callback_data="owner:list_staff"
+                    text="?????? ?????????", callback_data="owner:list_staff"
                 ),
             ]
         ]

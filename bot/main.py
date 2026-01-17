@@ -17,7 +17,7 @@ from bot.handlers import (
     admin_docs,
     ad_alerts,
     ads,
-    chat_moderation,
+    chat_greeting,
     coin_drop,
     deals,
     info,
@@ -30,7 +30,6 @@ from bot.handlers import (
     support,
     topic_activity,
 )
-from bot.handlers.moderation import commands as moderation_commands
 from bot.middlewares import ActionLogMiddleware, AccessMiddleware, ContextMiddleware
 from bot.services.daily_report import daily_report_loop
 from bot.services.topic_activity import topic_activity_loop
@@ -93,8 +92,7 @@ async def main() -> None:
     dp.include_router(ad_alerts.router)
     dp.include_router(start.router)
     dp.include_router(admin_docs.router)
-    dp.include_router(chat_moderation.router)
-    dp.include_router(moderation_commands.router)
+    dp.include_router(chat_greeting.router)
     dp.include_router(coin_drop.router)
     dp.include_router(ads.router)
     dp.include_router(deals.router)

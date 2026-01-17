@@ -14,8 +14,6 @@ from bot.db.models import (
     Ad,
     Deal,
     Game,
-    ModerationChat,
-    ModerationMemberEvent,
     Scammer,
     TopUp,
     User,
@@ -200,36 +198,7 @@ async def send_daily_report(
             .limit(5)
         )
         guarantor_stats = result.all()
-        result = await session.execute(
-            select(ModerationChat.chat_id, ModerationChat.title).where(
-                ModerationChat.active.is_(True)
-            )
-        )
-        moderated_chats = result.all()
-        member_events: dict[int, dict[str, int]] = {}
-        if moderated_chats:
-            # Aggregate join/leave stats per moderated chat for the report window.
-            chat_ids = [chat_id for chat_id, _ in moderated_chats]
-            result = await session.execute(
-                select(
-                    ModerationMemberEvent.chat_id,
-                    ModerationMemberEvent.event_type,
-                    func.count(ModerationMemberEvent.id),
-                )
-                .where(
-                    ModerationMemberEvent.chat_id.in_(chat_ids),
-                    ModerationMemberEvent.created_at >= start,
-                    ModerationMemberEvent.created_at < end,
-                )
-                .group_by(
-                    ModerationMemberEvent.chat_id,
-                    ModerationMemberEvent.event_type,
-                )
-            )
-            for chat_id, event_type, count in result.all():
-                member_events.setdefault(chat_id, {"join": 0, "leave": 0})
-                if event_type in member_events[chat_id]:
-                    member_events[chat_id][event_type] = count
+
 
     admin_chat_id = settings.admin_chat_id
     if admin_chat_id == 0:
@@ -263,15 +232,6 @@ async def send_daily_report(
             f"{gid} ({cnt} сделок, {sum_turn} ₽, комиссий {sum_fee} ₽)"
             for gid, cnt, sum_turn, sum_fee in guarantor_stats
         )
-    member_events_line = "-"
-    if moderated_chats:
-        # Render per-chat join/leave lines in a stable order.
-        lines = []
-        for mod_chat_id, title in moderated_chats:
-            stats = member_events.get(mod_chat_id, {"join": 0, "leave": 0})
-            name = title or str(mod_chat_id)
-            lines.append(f"{name}: +{stats['join']}/-{stats['leave']}")
-        member_events_line = "\n".join(lines)
     text = (
         "Ежедневный отчет GSNS\n"
         f"Сделки всего: {deals_total or 0}\n"
@@ -283,7 +243,6 @@ async def send_daily_report(
         f"Новых пользователей: {users_count or 0}\n"
         f"Пополнений коинов: {topups_count or 0} (сумма {topups_sum or 0} Coins)\n"
         f"Новых скамеров в базе: {scammers_count or 0}\n"
-        f"Входы/выходы по группам:\n{member_events_line}\n"
         f"Топ-игры (сделки): {games_line}\n"
         f"Оборот по играм: {games_turnover_line}\n"
         f"Топ-покупатели: {top_buyers_line}\n"

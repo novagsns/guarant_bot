@@ -125,12 +125,6 @@ def tools_menu_kb() -> InlineKeyboardMarkup:
         ],
             [
                 InlineKeyboardButton(
-                    text="\U0001f4cc \u041c\u043e\u0438 \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f",
-                    callback_data="tools:restrictions",
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="\u2b05\ufe0f \u041d\u0430\u0437\u0430\u0434",
                     callback_data="tools:back",
                 )

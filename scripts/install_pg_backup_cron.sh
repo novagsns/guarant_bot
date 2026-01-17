@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CRON_SCHEDULE="${1:-0 3 * * *}"
+CRON_SCHEDULE_FAST="${1:-*/5 * * * *}"
+CRON_SCHEDULE_NOTIFY="${2:-0 */2 * * *}"
 SCRIPT_PATH="/opt/gsns-bot/scripts/backup_postgres.sh"
 LOG_DIR="/opt/gsns-bot/data/pg_backups"
 LOG_FILE="${LOG_DIR}/backup.log"
 
 mkdir -p "${LOG_DIR}"
 
-CRON_LINE="${CRON_SCHEDULE} ${SCRIPT_PATH} >> ${LOG_FILE} 2>&1"
+CRON_LINE_FAST="${CRON_SCHEDULE_FAST} ${SCRIPT_PATH} --no-notify >> ${LOG_FILE} 2>&1"
+CRON_LINE_NOTIFY="${CRON_SCHEDULE_NOTIFY} ${SCRIPT_PATH} --notify --upload >> ${LOG_FILE} 2>&1"
 
-if crontab -l 2>/dev/null | grep -F "${SCRIPT_PATH}" >/dev/null; then
-  echo "Cron job already exists for ${SCRIPT_PATH}"
-  exit 0
-fi
+EXISTING="$(crontab -l 2>/dev/null | grep -v -F "${SCRIPT_PATH}" || true)"
+{
+  if [[ -n "${EXISTING}" ]]; then
+    echo "${EXISTING}"
+  fi
+  echo "${CRON_LINE_FAST}"
+  echo "${CRON_LINE_NOTIFY}"
+} | crontab -
 
-(crontab -l 2>/dev/null; echo "${CRON_LINE}") | crontab -
-echo "Cron installed: ${CRON_LINE}"
+echo "Cron installed:"
+echo "  ${CRON_LINE_FAST}"
+echo "  ${CRON_LINE_NOTIFY}"
