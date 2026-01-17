@@ -47,11 +47,17 @@ async def _truncate_tables(dest_conn: AsyncConnection) -> None:
 
 
 async def _copy_table(
-    src_conn: AsyncConnection, dest_conn: AsyncConnection, table
+    src_conn: AsyncConnection,
+    dest_conn: AsyncConnection,
+    table,
+    src_columns: set[str],
 ) -> None:
     """Copy all rows for a single table."""
+    columns = [table.c[name] for name in table.c.keys() if name in src_columns]
+    if not columns:
+        return
     try:
-        result = await src_conn.stream(select(table))
+        result = await src_conn.stream(select(*columns))
         async for partition in result.mappings().partitions(1000):
             rows = list(partition)
             if rows:
@@ -60,26 +66,38 @@ async def _copy_table(
     except Exception:
         pass
 
-    result = await src_conn.execute(select(table))
+    result = await src_conn.execute(select(*columns))
     rows = result.mappings().all()
     if rows:
         await dest_conn.execute(table.insert(), rows)
 
 
 async def _copy_users_table(
-    src_conn: AsyncConnection, dest_conn: AsyncConnection, table
+    src_conn: AsyncConnection,
+    dest_conn: AsyncConnection,
+    table,
+    src_columns: set[str],
 ) -> None:
     """Copy users table while deferring self-referential referrer_id updates."""
-    result = await src_conn.execute(
-        select(table.c.id, table.c.referrer_id).where(table.c.referrer_id.is_not(None))
-    )
-    referrers = [{"id": row.id, "referrer_id": row.referrer_id} for row in result]
+    columns = [table.c[name] for name in table.c.keys() if name in src_columns]
+    if not columns:
+        return
 
-    result = await src_conn.execute(select(table))
+    referrers = []
+    if "referrer_id" in src_columns:
+        result = await src_conn.execute(
+            select(table.c.id, table.c.referrer_id).where(
+                table.c.referrer_id.is_not(None)
+            )
+        )
+        referrers = [{"id": row.id, "referrer_id": row.referrer_id} for row in result]
+
+    result = await src_conn.execute(select(*columns))
     rows = []
     for row in result.mappings().all():
         payload = dict(row)
-        payload["referrer_id"] = None
+        if "referrer_id" in payload:
+            payload["referrer_id"] = None
         rows.append(payload)
     if rows:
         await dest_conn.execute(table.insert(), rows)
@@ -118,6 +136,14 @@ async def _get_sqlite_tables(src_conn: AsyncConnection) -> set[str]:
     return {row[0] for row in result.fetchall()}
 
 
+async def _get_sqlite_columns(
+    src_conn: AsyncConnection, table_name: str
+) -> set[str]:
+    """Fetch column names for a SQLite table."""
+    result = await src_conn.execute(text(f'PRAGMA table_info("{table_name}")'))
+    return {row[1] for row in result.fetchall()}
+
+
 async def migrate(sqlite_url: str, postgres_url: str, *, truncate: bool) -> None:
     """Copy data from SQLite to Postgres using ORM metadata."""
     await _create_schema(postgres_url, drop_existing=truncate)
@@ -126,6 +152,10 @@ async def migrate(sqlite_url: str, postgres_url: str, *, truncate: bool) -> None
 
     async with src_engine.connect() as src_conn:
         src_tables = await _get_sqlite_tables(src_conn)
+        src_columns_map = {
+            table_name: await _get_sqlite_columns(src_conn, table_name)
+            for table_name in src_tables
+        }
         if truncate:
             async with dest_engine.begin() as dest_conn:
                 await _truncate_tables(dest_conn)
@@ -137,10 +167,13 @@ async def migrate(sqlite_url: str, postgres_url: str, *, truncate: bool) -> None
             print(f"Copying {table.name}...")
             try:
                 async with dest_engine.begin() as dest_conn:
+                    src_columns = src_columns_map.get(table.name, set())
                     if table.name == "users":
-                        await _copy_users_table(src_conn, dest_conn, table)
+                        await _copy_users_table(
+                            src_conn, dest_conn, table, src_columns
+                        )
                     else:
-                        await _copy_table(src_conn, dest_conn, table)
+                        await _copy_table(src_conn, dest_conn, table, src_columns)
             except Exception as exc:
                 raise RuntimeError(f"Failed to copy table: {table.name}") from exc
 
