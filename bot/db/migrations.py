@@ -33,16 +33,6 @@ async def _ensure_migrations_table(conn: AsyncConnection, dialect_name: str) -> 
         conn: Active database connection.
         dialect_name: SQLAlchemy dialect name.
     """
-    if dialect_name == "sqlite":
-        await conn.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS schema_migrations ("
-                "version TEXT PRIMARY KEY, "
-                "applied_at TEXT DEFAULT CURRENT_TIMESTAMP)"
-            )
-        )
-        return
-
     await conn.execute(
         text(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("

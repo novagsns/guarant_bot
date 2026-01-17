@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -58,16 +57,10 @@ async def main() -> None:
     """Handle main."""
     settings = load_settings()
 
-    if settings.database_url.startswith("sqlite"):
-        os.makedirs("./data", exist_ok=True)
-
     engine = create_engine(settings.database_url)
     sessionmaker = create_sessionmaker(engine)
     await prepare_database(
         engine,
-        settings.database_url,
-        db_auto_backup=settings.db_auto_backup,
-        db_backup_dir=settings.db_backup_dir,
         allow_destructive=settings.db_allow_destructive_migrations,
     )
     await _ensure_default_games(sessionmaker, settings.default_games)

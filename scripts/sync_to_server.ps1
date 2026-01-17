@@ -4,6 +4,8 @@ $server = "root@89.169.53.249"
 $remotePath = "/opt/gsns-bot"
 $archive = ".deploy.tgz"
 
+ssh $server "cd $remotePath && bash scripts/backup_postgres.sh"
+
 if (Test-Path $archive) {
     Remove-Item -Force $archive
 }
@@ -22,7 +24,7 @@ tar -czf $archive `
 
 scp $archive "${server}:$remotePath/$archive"
 
-ssh $server "cd $remotePath && tar -xzf $archive && rm -f $archive && docker compose up -d --build"
+ssh $server "cd $remotePath && tar -xzf $archive && rm -f $archive && rm -f data/bot.db bot/db/backup.py scripts/migrate_remote.ps1 scripts/migrate_sqlite_to_postgres.py && docker compose up -d --build"
 
 Remove-Item -Force $archive
 

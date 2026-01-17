@@ -8,30 +8,24 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from bot.db import Base
-from bot.db.backup import backup_sqlite_db
 from bot.db.migrations import Migration, get_pending_migrations, run_migrations
 
 
 async def prepare_database(
     engine: AsyncEngine,
-    database_url: str,
     *,
-    db_auto_backup: bool,
-    db_backup_dir: str,
     allow_destructive: bool,
 ) -> None:
     """Prepare the database schema and apply safe migrations.
 
-    This function creates missing tables, applies non-destructive migrations,
-    and optionally writes a backup of the SQLite database before changes.
+    This function creates missing tables and applies non-destructive migrations.
 
     Args:
         engine: SQLAlchemy async engine.
-        database_url: SQLAlchemy database URL.
-        db_auto_backup: Whether to back up SQLite before migrations.
-        db_backup_dir: Directory for SQLite backups.
         allow_destructive: Whether destructive migrations are allowed.
     """
+    if engine.dialect.name != "postgresql":
+        raise RuntimeError("Only Postgres is supported.")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         pending = await get_pending_migrations(
@@ -39,8 +33,6 @@ async def prepare_database(
             engine.dialect.name,
             _get_migrations(),
         )
-        if pending and db_auto_backup:
-            backup_sqlite_db(database_url, db_backup_dir)
         await run_migrations(
             conn,
             engine.dialect.name,
@@ -95,17 +87,13 @@ async def _ensure_ads_media_columns(conn: AsyncConnection, dialect_name: str) ->
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(ads)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ads'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ads'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "media_type" not in columns:
         await conn.execute(text("ALTER TABLE ads ADD COLUMN media_type VARCHAR(16)"))
@@ -124,17 +112,13 @@ async def _ensure_user_profile_columns(
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(users)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'users'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "balance" not in columns:
         await conn.execute(
@@ -161,17 +145,13 @@ async def _ensure_user_trust_columns(conn: AsyncConnection, dialect_name: str) -
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(users)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'users'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "verified" not in columns:
         await conn.execute(
@@ -188,17 +168,13 @@ async def _ensure_ads_moderation_columns(
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(ads)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ads'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ads'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "moderation_status" not in columns:
         await conn.execute(
@@ -234,17 +210,13 @@ async def _ensure_user_vip_columns(conn: AsyncConnection, dialect_name: str) -> 
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(users)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'users'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "vip_until" not in columns:
         await conn.execute(text("ALTER TABLE users ADD COLUMN vip_until TIMESTAMP"))
@@ -269,17 +241,13 @@ async def _ensure_topup_columns(conn: AsyncConnection, dialect_name: str) -> Non
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(topups)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'topups'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'topups'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "amount_rub" not in columns:
         await conn.execute(
@@ -298,17 +266,13 @@ async def _ensure_wallet_tx_columns(conn: AsyncConnection, dialect_name: str) ->
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(wallet_transactions)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'wallet_transactions'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'wallet_transactions'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "ref_type" not in columns:
         await conn.execute(
@@ -329,17 +293,13 @@ async def _ensure_service_media_columns(
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(services)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'services'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'services'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "media_type" not in columns:
         await conn.execute(
@@ -360,31 +320,22 @@ async def _ensure_support_ticket_columns(
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(support_tickets)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'support_tickets'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'support_tickets'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "last_message" not in columns:
         await conn.execute(
             text("ALTER TABLE support_tickets ADD COLUMN last_message TEXT")
         )
     if "assignee_id" not in columns:
-        if dialect_name == "sqlite":
-            await conn.execute(
-                text("ALTER TABLE support_tickets ADD COLUMN assignee_id INTEGER")
-            )
-        else:
-            await conn.execute(
-                text("ALTER TABLE support_tickets ADD COLUMN assignee_id BIGINT")
-            )
+        await conn.execute(
+            text("ALTER TABLE support_tickets ADD COLUMN assignee_id BIGINT")
+        )
 
 
 async def _ensure_ad_account_columns(conn: AsyncConnection, dialect_name: str) -> None:
@@ -394,17 +345,13 @@ async def _ensure_ad_account_columns(conn: AsyncConnection, dialect_name: str) -
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(ads)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ads'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ads'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "account_id" not in columns:
         await conn.execute(text("ALTER TABLE ads ADD COLUMN account_id VARCHAR(64)"))
@@ -419,17 +366,13 @@ async def _ensure_ads_promoted_columns(
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(ads)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ads'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ads'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "promoted_at" not in columns:
         await conn.execute(text("ALTER TABLE ads ADD COLUMN promoted_at TIMESTAMP"))
@@ -442,17 +385,13 @@ async def _ensure_ads_kind_columns(conn: AsyncConnection, dialect_name: str) -> 
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(ads)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ads'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ads'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "ad_kind" not in columns:
         await conn.execute(
@@ -468,17 +407,13 @@ async def _ensure_deal_columns(conn: AsyncConnection, dialect_name: str) -> None
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(deals)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'deals'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'deals'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "closed_at" not in columns:
         await conn.execute(text("ALTER TABLE deals ADD COLUMN closed_at TIMESTAMP"))
@@ -494,33 +429,6 @@ async def _ensure_deal_columns(conn: AsyncConnection, dialect_name: str) -> None
 
 async def _ensure_deal_room_table(conn: AsyncConnection, dialect_name: str) -> None:
     """Ensure deal_rooms table exists."""
-    if dialect_name == "sqlite":
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='deal_rooms'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE deal_rooms ("
-                    "id INTEGER PRIMARY KEY,"
-                    "chat_id BIGINT UNIQUE NOT NULL,"
-                    "title VARCHAR(255),"
-                    "invite_link TEXT,"
-                    "active BOOLEAN DEFAULT 1,"
-                    "created_by INTEGER,"
-                    "assigned_deal_id INTEGER,"
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "FOREIGN KEY(created_by) REFERENCES users(id),"
-                    "FOREIGN KEY(assigned_deal_id) REFERENCES deals(id)"
-                    ")"
-                )
-            )
-        return
-
     result = await conn.execute(
         text(
             "SELECT table_name FROM information_schema.tables "
@@ -547,32 +455,6 @@ async def _ensure_deal_room_table(conn: AsyncConnection, dialect_name: str) -> N
 
 async def _ensure_deal_message_table(conn: AsyncConnection, dialect_name: str) -> None:
     """Ensure deal_messages table exists."""
-    if dialect_name == "sqlite":
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='deal_messages'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE deal_messages ("
-                    "id INTEGER PRIMARY KEY,"
-                    "deal_id INTEGER NOT NULL,"
-                    "sender_id BIGINT NOT NULL,"
-                    "sender_role VARCHAR(16) NOT NULL,"
-                    "message_type VARCHAR(16) NOT NULL,"
-                    "text TEXT,"
-                    "file_id VARCHAR(256),"
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "FOREIGN KEY(deal_id) REFERENCES deals(id)"
-                    ")"
-                )
-            )
-        return
-
     result = await conn.execute(
         text(
             "SELECT table_name FROM information_schema.tables "
@@ -601,81 +483,6 @@ async def _ensure_topic_activity_tables(
     conn: AsyncConnection, dialect_name: str
 ) -> None:
     """Ensure topic activity tables exist."""
-    if dialect_name == "sqlite":
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='topic_activity_meta'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE topic_activity_meta ("
-                    "id INTEGER PRIMARY KEY,"
-                    "chat_id BIGINT NOT NULL,"
-                    "topic_id INTEGER NOT NULL,"
-                    "pinned_message_id INTEGER,"
-                    "period_start TIMESTAMP,"
-                    "last_reward_at TIMESTAMP,"
-                    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "UNIQUE(chat_id, topic_id)"
-                    ")"
-                )
-            )
-
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='topic_activity_stats'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE topic_activity_stats ("
-                    "id INTEGER PRIMARY KEY,"
-                    "chat_id BIGINT NOT NULL,"
-                    "topic_id INTEGER NOT NULL,"
-                    "user_id BIGINT NOT NULL,"
-                    "username VARCHAR(64),"
-                    "full_name VARCHAR(128),"
-                    "message_count INTEGER DEFAULT 0,"
-                    "last_counted_at TIMESTAMP,"
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "updated_at TIMESTAMP,"
-                    "UNIQUE(chat_id, topic_id, user_id)"
-                    ")"
-                )
-            )
-
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='topic_activity_rewards'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE topic_activity_rewards ("
-                    "id INTEGER PRIMARY KEY,"
-                    "chat_id BIGINT NOT NULL,"
-                    "topic_id INTEGER NOT NULL,"
-                    "user_id BIGINT NOT NULL,"
-                    "amount INTEGER NOT NULL,"
-                    "status VARCHAR(16) DEFAULT 'pending',"
-                    "period_start TIMESTAMP,"
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "granted_at TIMESTAMP"
-                    ")"
-                )
-            )
-        return
-
     result = await conn.execute(
         text(
             "SELECT table_name FROM information_schema.tables "
@@ -752,37 +559,6 @@ async def _ensure_topic_activity_tables(
 
 async def _ensure_coin_drop_table(conn: AsyncConnection, dialect_name: str) -> None:
     """Ensure coin_drops table exists."""
-    if dialect_name == "sqlite":
-        result = await conn.execute(
-            text(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='coin_drops'"
-            )
-        )
-        exists = result.first() is not None
-        if not exists:
-            await conn.execute(
-                text(
-                    "CREATE TABLE coin_drops ("
-                    "id INTEGER PRIMARY KEY,"
-                    "chat_id BIGINT NOT NULL,"
-                    "topic_id INTEGER,"
-                    "message_id INTEGER,"
-                    "created_by BIGINT NOT NULL,"
-                    "claimed_by BIGINT,"
-                    "claimed_username VARCHAR(64),"
-                    "amount INTEGER,"
-                    "credited BOOLEAN DEFAULT 0,"
-                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                    "claimed_at TIMESTAMP,"
-                    "credited_at TIMESTAMP,"
-                    "FOREIGN KEY(created_by) REFERENCES users(id),"
-                    "FOREIGN KEY(claimed_by) REFERENCES users(id)"
-                    ")"
-                )
-            )
-        return
-
     result = await conn.execute(
         text(
             "SELECT table_name FROM information_schema.tables "
@@ -818,17 +594,13 @@ async def _ensure_dispute_columns(conn: AsyncConnection, dialect_name: str) -> N
         conn: Value for conn.
         dialect_name: Value for dialect_name.
     """
-    if dialect_name == "sqlite":
-        result = await conn.execute(text("PRAGMA table_info(disputes)"))
-        columns = {row[1] for row in result.fetchall()}
-    else:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'disputes'"
-            )
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'disputes'"
         )
-        columns = {row[0] for row in result.fetchall()}
+    )
+    columns = {row[0] for row in result.fetchall()}
 
     if "winner_id" not in columns:
         await conn.execute(text("ALTER TABLE disputes ADD COLUMN winner_id INTEGER"))

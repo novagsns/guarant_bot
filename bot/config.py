@@ -73,11 +73,10 @@ class Settings:
         wallet_trc20: Attribute value.
         referral_bonus: Attribute value.
         coins_per_rub: Attribute value.
+        coins_per_usdt: Attribute value.
         usdt_rate_rub: Attribute value.
         min_topup_rub: Attribute value.
         moderation_blacklist: Attribute value.
-        db_auto_backup: Attribute value.
-        db_backup_dir: Attribute value.
         db_allow_destructive_migrations: Attribute value.
         roulette_skin_prob: Attribute value.
         roulette_big_win_prob: Attribute value.
@@ -97,11 +96,10 @@ class Settings:
     wallet_trc20: str
     referral_bonus: int
     coins_per_rub: Decimal
+    coins_per_usdt: Decimal
     usdt_rate_rub: Decimal
     min_topup_rub: Decimal
     moderation_blacklist: List[str]
-    db_auto_backup: bool
-    db_backup_dir: str
     db_allow_destructive_migrations: bool
     roulette_skin_prob: Decimal
     roulette_big_win_prob: Decimal
@@ -130,16 +128,24 @@ def load_settings() -> Settings:
     admin_topic_id = int(admin_topic_id_raw) if admin_topic_id_raw else None
 
     owner_ids = _parse_int_list(os.getenv("OWNER_IDS"))
-    database_url = os.getenv(
-        "DATABASE_URL", "sqlite+aiosqlite:///./data/bot.db"
-    ).strip()
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required")
+    if not database_url.startswith("postgres"):
+        raise RuntimeError("DATABASE_URL must point to Postgres")
     default_games = _parse_str_list(
         os.getenv("DEFAULT_GAMES", "MLBB,Tanks,PUBG,Genshin")
     )
     wallet_trc20 = os.getenv("WALLET_TRC20", "").strip()
     referral_bonus = int(os.getenv("REFERRAL_BONUS", "10"))
-    coins_per_rub = Decimal(os.getenv("COINS_PER_RUB", "10"))
     usdt_rate_rub = Decimal(os.getenv("USDT_RATE_RUB", "100"))
+    coins_per_rub_raw = Decimal(os.getenv("COINS_PER_RUB", "10"))
+    coins_per_usdt_raw = os.getenv("COINS_PER_USDT", "").strip()
+    if coins_per_usdt_raw:
+        coins_per_usdt = Decimal(coins_per_usdt_raw)
+    else:
+        coins_per_usdt = (coins_per_rub_raw * usdt_rate_rub).quantize(Decimal("0.01"))
+    coins_per_rub = (coins_per_usdt / usdt_rate_rub).quantize(Decimal("0.0001"))
     min_topup_rub = Decimal(os.getenv("MIN_TOPUP_RUB", "500"))
     moderation_blacklist = _parse_str_list(
         os.getenv(
@@ -148,8 +154,6 @@ def load_settings() -> Settings:
             "быстрый заработок,инвестиции,удаленная работа,работа дома",
         )
     )
-    db_auto_backup = _parse_bool(os.getenv("DB_AUTO_BACKUP"), default=True)
-    db_backup_dir = os.getenv("DB_BACKUP_DIR", "./data/backups").strip()
     db_allow_destructive_migrations = _parse_bool(
         os.getenv("DB_ALLOW_DESTRUCTIVE_MIGRATIONS"),
         default=False,
@@ -172,11 +176,10 @@ def load_settings() -> Settings:
         wallet_trc20=wallet_trc20,
         referral_bonus=referral_bonus,
         coins_per_rub=coins_per_rub,
+        coins_per_usdt=coins_per_usdt,
         usdt_rate_rub=usdt_rate_rub,
         min_topup_rub=min_topup_rub,
         moderation_blacklist=moderation_blacklist,
-        db_auto_backup=db_auto_backup,
-        db_backup_dir=db_backup_dir,
         db_allow_destructive_migrations=db_allow_destructive_migrations,
         roulette_skin_prob=roulette_skin_prob,
         roulette_big_win_prob=roulette_big_win_prob,

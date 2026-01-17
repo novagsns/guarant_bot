@@ -7,12 +7,15 @@ from decimal import Decimal, InvalidOperation
 from html import escape
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
+    InputMediaVideo,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -324,7 +327,7 @@ def _ads_page_callback(
     return f"ads_page:{ad_kind}:{page}:{encoded_game}:{encoded_min}:{encoded_max}"
 
 
-def _ads_page_kb(
+def _ads_nav_row(
     ad_kind: str,
     *,
     page: int,
@@ -332,8 +335,8 @@ def _ads_page_kb(
     game_id: int | None = None,
     price_min: Decimal | None = None,
     price_max: Decimal | None = None,
-) -> InlineKeyboardMarkup | None:
-    """Build pagination keyboard for ads list."""
+) -> list[InlineKeyboardButton] | None:
+    """Build the navigation row for ads pagination."""
     if total_pages <= 1:
         return None
     nav: list[InlineKeyboardButton] = []
@@ -356,7 +359,156 @@ def _ads_page_kb(
                 ),
             )
         )
-    return InlineKeyboardMarkup(inline_keyboard=[nav])
+    return nav
+
+
+def _build_ads_list_kb(
+    ad_id: int,
+    *,
+    ad_kind: str,
+    page: int,
+    total_pages: int,
+    game_id: int | None = None,
+    price_min: Decimal | None = None,
+    price_max: Decimal | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    action_kb = (
+        exchange_actions_kb(ad_id)
+        if ad_kind == "exchange"
+        else ad_actions_kb(ad_id)
+    )
+    rows.extend(action_kb.inline_keyboard)
+    nav_row = _ads_nav_row(
+        ad_kind,
+        page=page,
+        total_pages=total_pages,
+        game_id=game_id,
+        price_min=price_min,
+        price_max=price_max,
+    )
+    if nav_row:
+        rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _format_ad_caption(
+    ad: Ad,
+    game: Game | None,
+    seller: User | None,
+    *,
+    ad_kind: str,
+    page: int | None = None,
+    total_pages: int | None = None,
+) -> str:
+    title_html = ad.title_html or escape(ad.title)
+    description_html = ad.description_html or escape(ad.description)
+    game_name = escape(game.name) if game else "-"
+    if ad_kind == "exchange":
+        price_line = f"💰 Доплата: {ad.price or 0} ₽\n"
+    else:
+        if ad.price is None:
+            price_line = "💰 Цена: Договорная\n"
+        else:
+            price_line = f"💰 Цена: {ad.price} ₽\n"
+    vip_badge = is_vip_until(seller.vip_until if seller else None)
+    if vip_badge and ad_kind == "sale":
+        price_label = (
+            f"{ad.price:,.2f}".replace(",", " ") + " ₽"
+            if ad.price is not None
+            else "Договорная"
+        )
+        caption = (
+            f"🚗 VIP Объявление: {title_html}\n"
+            "Новое поступление от проверенного продавца!\n"
+            "Этот аккаунт прошел проверку и готов к передаче новому владельцу. "
+            "Идеальный выбор для тех, кто ценит статус и качество.\n\n"
+            "💰 Стоимость\n\n"
+            f"{price_label}\n\n"
+            "Заинтересовало предложение? Перейдите в личный кабинет для связи с продавцом или бронирования."
+        )
+    else:
+        caption = (
+            f"<b>{title_html}</b>\n"
+            f"🎮 Игра: {game_name}\n"
+            f"{price_line}"
+            f"{description_html}"
+        )
+    if page is not None and total_pages is not None:
+        caption = f"{caption}\n\nСтраница {page}/{total_pages}"
+    return caption
+
+
+async def _edit_ads_message(
+    message: Message,
+    *,
+    caption: str,
+    reply_markup: InlineKeyboardMarkup | None,
+    has_media: bool,
+    media_type: str | None,
+    media_file_id: str | None,
+) -> Message:
+    if has_media and media_file_id:
+        if message.photo or message.video:
+            media = (
+                InputMediaVideo(
+                    media=media_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                )
+                if media_type == "видео"
+                else InputMediaPhoto(
+                    media=media_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                )
+            )
+            try:
+                return await message.edit_media(
+                    media=media, reply_markup=reply_markup
+                )
+            except TelegramBadRequest:
+                pass
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        if media_type == "видео":
+            return await message.answer_video(
+                media_file_id,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        return await message.answer_photo(
+            media_file_id,
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+
+    if message.photo or message.video:
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        return await message.answer(
+            caption,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    try:
+        return await message.edit_text(
+            caption,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        return await message.answer(
+            caption,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
 
 
 async def _send_ads(
@@ -368,6 +520,7 @@ async def _send_ads(
     price_min: Decimal | None = None,
     price_max: Decimal | None = None,
     page: int = 1,
+    edit_message: bool = False,
 ) -> None:
     """Handle send ads.
 
@@ -423,53 +576,52 @@ async def _send_ads(
             if ad_kind == "exchange"
             else "Пока нет объявлений."
         )
-        await message.answer(empty_text)
+        if edit_message:
+            await _edit_ads_message(
+                message,
+                caption=empty_text,
+                reply_markup=None,
+                has_media=False,
+                media_type=None,
+                media_file_id=None,
+            )
+        else:
+            await message.answer(empty_text)
         return
 
-    for ad, game, seller in rows:
-        if ad_kind == "exchange":
-            price_line = f"💰 Доплата: {ad.price or 0} ₽\n"
-            actions_kb = exchange_actions_kb(ad.id)
-        else:
-            price_line = f"💰 Цена: {ad.price} ₽\n"
-            actions_kb = ad_actions_kb(ad.id)
+    ad, game, seller = rows[0]
+    caption = _format_ad_caption(
+        ad,
+        game,
+        seller,
+        ad_kind=ad_kind,
+        page=page,
+        total_pages=total_pages,
+    )
+    has_media = bool(ad.media_file_id and ad.media_type in {"фото", "видео"})
+    actions_kb = _build_ads_list_kb(
+        ad.id,
+        ad_kind=ad_kind,
+        page=page,
+        total_pages=total_pages,
+        game_id=game_id,
+        price_min=price_min,
+        price_max=price_max,
+    )
+    if edit_message:
+        await _edit_ads_message(
+            message,
+            caption=caption,
+            reply_markup=actions_kb,
+            has_media=has_media,
+            media_type=ad.media_type,
+            media_file_id=ad.media_file_id,
+        )
+        return
 
-        title_html = ad.title_html or escape(ad.title)
-        description_html = ad.description_html or escape(ad.description)
-        game_name = escape(game.name)
-        vip_badge = is_vip_until(seller.vip_until if seller else None)
-        if vip_badge:
-            price_label = (
-                f"{ad.price:,.2f}".replace(",", " ") + " ₽"
-                if ad.price is not None
-                else "Договорная"
-            )
-            caption = (
-                f"🚗 VIP Объявление: {title_html}\n"
-                "Новое поступление от проверенного продавца!\n"
-                "Этот аккаунт прошел проверку и готов к передаче новому владельцу. "
-                "Идеальный выбор для тех, кто ценит статус и качество.\n\n"
-                "💰 Стоимость\n\n"
-                f"{price_label}\n\n"
-                "Заинтересовало предложение? Перейдите в личный кабинет для связи с продавцом или бронирования."
-            )
-        else:
-            caption = (
-                f"<b>{title_html}</b>\n"
-                f"🎮 Игра: {game_name}\n"
-                f"{price_line}"
-                f"{description_html}"
-            )
-        expected_emojis = _count_custom_emoji_html(caption)
-
-        if ad.media_type == "фото" and ad.media_file_id:
-            response = await message.answer_photo(
-                ad.media_file_id,
-                caption=caption,
-                reply_markup=actions_kb,
-                parse_mode="HTML",
-            )
-        elif ad.media_type == "видео" and ad.media_file_id:
+    expected_emojis = _count_custom_emoji_html(caption)
+    if has_media and ad.media_file_id:
+        if ad.media_type == "видео":
             response = await message.answer_video(
                 ad.media_file_id,
                 caption=caption,
@@ -477,36 +629,30 @@ async def _send_ads(
                 parse_mode="HTML",
             )
         else:
-            response = await message.answer(
-                caption, reply_markup=actions_kb, parse_mode="HTML"
+            response = await message.answer_photo(
+                ad.media_file_id,
+                caption=caption,
+                reply_markup=actions_kb,
+                parse_mode="HTML",
             )
-
-        if expected_emojis:
-            actual_emojis = _count_custom_emoji_entities(response)
-            if actual_emojis < expected_emojis:
-                await _notify_custom_emoji_loss(
-                    message.bot,
-                    sessionmaker,
-                    context="ads_publish",
-                    expected=expected_emojis,
-                    actual=actual_emojis,
-                    chat_id=message.chat.id,
-                    ad_id=ad.id,
-                )
-
-    pagination_kb = _ads_page_kb(
-        ad_kind,
-        page=page,
-        total_pages=total_pages,
-        game_id=game_id,
-        price_min=price_min,
-        price_max=price_max,
-    )
-    if pagination_kb:
-        await message.answer(
-            f"Страница {page} из {total_pages}",
-            reply_markup=pagination_kb,
+    else:
+        response = await message.answer(
+            caption,
+            reply_markup=actions_kb,
+            parse_mode="HTML",
         )
+    if expected_emojis:
+        actual_emojis = _count_custom_emoji_entities(response)
+        if actual_emojis < expected_emojis:
+            await _notify_custom_emoji_loss(
+                message.bot,
+                sessionmaker,
+                context="ads_publish",
+                expected=expected_emojis,
+                actual=actual_emojis,
+                chat_id=message.chat.id,
+                ad_id=ad.id,
+            )
 
 
 async def _send_exchanges(message: Message, sessionmaker: async_sessionmaker) -> None:
@@ -558,7 +704,11 @@ async def all_ads(message: Message, sessionmaker: async_sessionmaker) -> None:
 
 
 async def _show_games_page(
-    message: Message, sessionmaker: async_sessionmaker, *, page: int
+    message: Message,
+    sessionmaker: async_sessionmaker,
+    *,
+    page: int,
+    edit_message: bool = False,
 ) -> None:
     """Show paginated games list for sale filters."""
     page = max(page, 1)
@@ -578,16 +728,21 @@ async def _show_games_page(
             .offset((page - 1) * per_page)
         )
         games = result.all()
-    await message.answer(
-        "🎮 Выберите игру для фильтра:",
-        reply_markup=game_list_kb(
-            games,
-            prefix="filter_game",
-            page=page,
-            total_pages=total_pages,
-            include_all=True,
-        ),
+    text = "🎮 Выберите игру для фильтра:"
+    reply_markup = game_list_kb(
+        games,
+        prefix="filter_game",
+        page=page,
+        total_pages=total_pages,
+        include_all=True,
     )
+    if edit_message:
+        try:
+            await message.edit_text(text, reply_markup=reply_markup)
+        except TelegramBadRequest:
+            await message.answer(text, reply_markup=reply_markup)
+    else:
+        await message.answer(text, reply_markup=reply_markup)
 
 
 @router.callback_query(F.data.startswith("game_page:"))
@@ -598,7 +753,12 @@ async def game_page(callback: CallbackQuery, sessionmaker: async_sessionmaker) -
     except (ValueError, AttributeError):
         await callback.answer("Некорректные данные.", show_alert=True)
         return
-    await _show_games_page(callback.message, sessionmaker, page=page)
+    await _show_games_page(
+        callback.message,
+        sessionmaker,
+        page=page,
+        edit_message=True,
+    )
     await callback.answer()
 
 
@@ -617,10 +777,12 @@ async def filter_game(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Некорректные данные.", show_alert=True)
         return
-    await callback.message.answer(
-        "💰 Выберите диапазон цен:",
-        reply_markup=account_filter_kb(game_id if game_id > 0 else None),
-    )
+    text = "💰 Выберите диапазон цен:"
+    reply_markup = account_filter_kb(game_id if game_id > 0 else None)
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=reply_markup)
     await callback.answer()
 
 
@@ -668,6 +830,7 @@ async def account_filter(
         price_min=price_min,
         price_max=price_max,
         page=1,
+        edit_message=True,
     )
     await callback.answer()
 
@@ -708,6 +871,7 @@ async def ads_page(callback: CallbackQuery, sessionmaker: async_sessionmaker) ->
         price_min=price_min if ad_kind == "sale" else None,
         price_max=price_max if ad_kind == "sale" else None,
         page=page,
+        edit_message=True,
     )
     await callback.answer()
 

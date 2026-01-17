@@ -19,71 +19,37 @@ MAX_SUBSCRIPTIONS = 10
 async def _ensure_tables(session) -> None:
     if session.info.get("ad_alerts_ready"):
         return
-    dialect = session.bind.dialect.name
-    if dialect == "sqlite":
-        await session.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS ad_alert_subscriptions ("
-                "id INTEGER PRIMARY KEY,"
-                "user_id BIGINT NOT NULL,"
-                "game_id INTEGER,"
-                "price_min NUMERIC(12,2),"
-                "price_max NUMERIC(12,2),"
-                "server_query VARCHAR(64),"
-                "active BOOLEAN DEFAULT 1,"
-                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-                ")"
-            )
+    await session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS ad_alert_subscriptions ("
+            "id SERIAL PRIMARY KEY,"
+            "user_id BIGINT NOT NULL,"
+            "game_id INTEGER,"
+            "price_min NUMERIC(12,2),"
+            "price_max NUMERIC(12,2),"
+            "server_query VARCHAR(64),"
+            "active BOOLEAN DEFAULT TRUE,"
+            "created_at TIMESTAMPTZ DEFAULT now()"
+            ")"
         )
-        await session.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS ad_alert_deliveries ("
-                "id INTEGER PRIMARY KEY,"
-                "user_id BIGINT NOT NULL,"
-                "ad_id INTEGER NOT NULL,"
-                "delivered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
-                "UNIQUE(user_id, ad_id)"
-                ")"
-            )
+    )
+    await session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS ad_alert_deliveries ("
+            "id SERIAL PRIMARY KEY,"
+            "user_id BIGINT NOT NULL,"
+            "ad_id INTEGER NOT NULL,"
+            "delivered_at TIMESTAMPTZ DEFAULT now(),"
+            "UNIQUE(user_id, ad_id)"
+            ")"
         )
-        await session.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_ad_alert_subscriptions_user "
-                "ON ad_alert_subscriptions (user_id)"
-            )
+    )
+    await session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_ad_alert_subscriptions_user "
+            "ON ad_alert_subscriptions (user_id)"
         )
-    else:
-        await session.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS ad_alert_subscriptions ("
-                "id SERIAL PRIMARY KEY,"
-                "user_id BIGINT NOT NULL,"
-                "game_id INTEGER,"
-                "price_min NUMERIC(12,2),"
-                "price_max NUMERIC(12,2),"
-                "server_query VARCHAR(64),"
-                "active BOOLEAN DEFAULT TRUE,"
-                "created_at TIMESTAMPTZ DEFAULT now()"
-                ")"
-            )
-        )
-        await session.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS ad_alert_deliveries ("
-                "id SERIAL PRIMARY KEY,"
-                "user_id BIGINT NOT NULL,"
-                "ad_id INTEGER NOT NULL,"
-                "delivered_at TIMESTAMPTZ DEFAULT now(),"
-                "UNIQUE(user_id, ad_id)"
-                ")"
-            )
-        )
-        await session.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_ad_alert_subscriptions_user "
-                "ON ad_alert_subscriptions (user_id)"
-            )
-        )
+    )
     await session.commit()
     session.info["ad_alerts_ready"] = True
 
@@ -116,7 +82,6 @@ async def create_subscription(
 ) -> int | None:
     async with sessionmaker() as session:
         await _ensure_tables(session)
-        dialect = session.bind.dialect.name
         count_result = await session.execute(
             text(
                 "SELECT COUNT(*) FROM ad_alert_subscriptions "
@@ -136,28 +101,16 @@ async def create_subscription(
             "server_query": server_query,
             "active": True,
         }
-        if dialect == "sqlite":
-            await session.execute(
-                text(
-                    "INSERT INTO ad_alert_subscriptions "
-                    "(user_id, game_id, price_min, price_max, server_query, active) "
-                    "VALUES (:user_id, :game_id, :price_min, :price_max, :server_query, :active)"
-                ),
-                params,
-            )
-            result = await session.execute(text("SELECT last_insert_rowid()"))
-            sub_id = result.scalar_one()
-        else:
-            result = await session.execute(
-                text(
-                    "INSERT INTO ad_alert_subscriptions "
-                    "(user_id, game_id, price_min, price_max, server_query, active) "
-                    "VALUES (:user_id, :game_id, :price_min, :price_max, :server_query, :active) "
-                    "RETURNING id"
-                ),
-                params,
-            )
-            sub_id = result.scalar_one()
+        result = await session.execute(
+            text(
+                "INSERT INTO ad_alert_subscriptions "
+                "(user_id, game_id, price_min, price_max, server_query, active) "
+                "VALUES (:user_id, :game_id, :price_min, :price_max, :server_query, :active) "
+                "RETURNING id"
+            ),
+            params,
+        )
+        sub_id = result.scalar_one()
         await session.commit()
         return sub_id
 
@@ -297,21 +250,12 @@ async def notify_ad_alerts_for_ad(
 
         async with sessionmaker() as session:
             await _ensure_tables(session)
-            if session.bind.dialect.name == "sqlite":
-                await session.execute(
-                    text(
-                        "INSERT OR IGNORE INTO ad_alert_deliveries (user_id, ad_id) "
-                        "VALUES (:user_id, :ad_id)"
-                    ),
-                    {"user_id": user_id, "ad_id": ad.id},
-                )
-            else:
-                await session.execute(
-                    text(
-                        "INSERT INTO ad_alert_deliveries (user_id, ad_id) "
-                        "VALUES (:user_id, :ad_id) "
-                        "ON CONFLICT (user_id, ad_id) DO NOTHING"
-                    ),
-                    {"user_id": user_id, "ad_id": ad.id},
-                )
+            await session.execute(
+                text(
+                    "INSERT INTO ad_alert_deliveries (user_id, ad_id) "
+                    "VALUES (:user_id, :ad_id) "
+                    "ON CONFLICT (user_id, ad_id) DO NOTHING"
+                ),
+                {"user_id": user_id, "ad_id": ad.id},
+            )
             await session.commit()

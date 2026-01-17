@@ -39,6 +39,12 @@ from bot.keyboards.services import (
     topup_review_kb,
     topup_start_confirm_kb,
 )
+from bot.services.currency import (
+    coins_per_rub_rate,
+    rub_to_coins,
+    rub_to_usdt,
+    usdt_per_rub_rate,
+)
 from bot.utils.admin_target import get_admin_target
 from bot.utils.moderation import contains_prohibited
 from bot.utils.roles import is_owner
@@ -1084,12 +1090,11 @@ async def _begin_topup(
     await state.clear()
     await state.set_state(TopUpStates.amount)
     wallet = settings.wallet_trc20 or "не настроено"
-    coins_per_rub = settings.coins_per_rub
-    usdt_rate = settings.usdt_rate_rub
     min_rub = settings.min_topup_rub
-    usdt_per_rub = (Decimal("1") / usdt_rate).quantize(Decimal("0.0001"))
-    min_usdt = (min_rub / usdt_rate).quantize(Decimal("0.0001"))
-    min_coins = (min_rub * coins_per_rub).quantize(Decimal("0.01"))
+    usdt_per_rub = usdt_per_rub_rate(settings)
+    coins_per_rub = coins_per_rub_rate(settings)
+    min_usdt = rub_to_usdt(min_rub, settings)
+    min_coins = rub_to_coins(min_rub, settings)
     await callback.message.answer(
         "Пополнение GSNS Coins.\n"
         f"Кошелек TRC20: <code>{wallet}</code>\n"
@@ -1119,8 +1124,8 @@ async def topup_amount(message: Message, state: FSMContext, settings: Settings) 
     if amount < settings.min_topup_rub:
         await message.answer(f"Минимальная сумма {settings.min_topup_rub} ₽.")
         return
-    usdt = (amount / settings.usdt_rate_rub).quantize(Decimal("0.0001"))
-    coins = (amount * settings.coins_per_rub).quantize(Decimal("0.01"))
+    usdt = rub_to_usdt(amount, settings)
+    coins = rub_to_coins(amount, settings)
     await state.update_data(amount=amount)
     await state.update_data(usdt=usdt, coins=coins)
     await state.set_state(TopUpStates.confirm)
@@ -1274,9 +1279,7 @@ async def topup_ok(
             await callback.answer("Заявка не найдена.")
             return
         if topup.amount_rub is not None:
-            expected = (topup.amount_rub * settings.coins_per_rub).quantize(
-                Decimal("0.01")
-            )
+            expected = rub_to_coins(topup.amount_rub, settings)
             actual = Decimal(str(topup.amount or 0))
             diff = (expected - actual).copy_abs()
             if diff > Decimal("0.01"):

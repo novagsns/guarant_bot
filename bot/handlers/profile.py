@@ -34,6 +34,12 @@ from bot.db.models import (
     WalletTransaction,
 )
 from bot.handlers.helpers import get_or_create_user
+from bot.services.currency import (
+    coins_per_rub_rate,
+    rub_to_coins,
+    rub_to_usdt,
+    usdt_per_rub_rate,
+)
 from bot.services.trust import (
     apply_deal_no_dispute_bonus,
     apply_trust_event,
@@ -584,18 +590,15 @@ async def profile_wallet(
         )
         rows = result.scalars().all()
 
-    usdt_per_rub = (Decimal("1") / settings.usdt_rate_rub).quantize(Decimal("0.0001"))
-    min_usdt = (settings.min_topup_rub / settings.usdt_rate_rub).quantize(
-        Decimal("0.0001")
-    )
-    min_coins = (settings.min_topup_rub * settings.coins_per_rub).quantize(
-        Decimal("0.01")
-    )
+    usdt_per_rub = usdt_per_rub_rate(settings)
+    coins_per_rub = coins_per_rub_rate(settings)
+    min_usdt = rub_to_usdt(settings.min_topup_rub, settings)
+    min_coins = rub_to_coins(settings.min_topup_rub, settings)
 
     lines = [
         "<b>💳 Баланс и операции</b>",
         f"💰 Баланс: <b>{user.balance or 0} GSNS Coins</b>",
-        f"💱 Курс: 1 ₽ = {usdt_per_rub} USDT = {settings.coins_per_rub} Coins",
+        f"💱 Курс: 1 ₽ = {usdt_per_rub} USDT = {coins_per_rub} Coins",
         (
             "✅ Минимум пополнения: "
             f"{settings.min_topup_rub} ₽ = {min_usdt} USDT = {min_coins} Coins"

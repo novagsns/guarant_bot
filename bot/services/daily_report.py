@@ -48,10 +48,7 @@ def _to_query_bounds(settings: Settings) -> tuple[datetime, datetime]:
     Returns:
         Return value.
     """
-    # SQLite stores naive timestamps, so normalize bounds accordingly.
     start, end = _day_bounds_msk()
-    if settings.database_url.startswith("sqlite"):
-        return start.replace(tzinfo=None), end.replace(tzinfo=None)
     return start, end
 
 
