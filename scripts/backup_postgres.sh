@@ -5,10 +5,26 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 
 if [[ -f "${ENV_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "${ENV_FILE}"
-  set +a
+  load_key() {
+    local key="$1"
+    local line
+    line=$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1) || return 0
+    local value="${line#${key}=}"
+    value="${value%$'\r'}"
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    printf -v "${key}" "%s" "${value}"
+    export "${key}"
+  }
+
+  load_key "POSTGRES_USER"
+  load_key "POSTGRES_DB"
+  load_key "PG_BACKUP_DIR"
+  load_key "PG_BACKUP_RETENTION_DAYS"
+  load_key "BOT_TOKEN"
+  load_key "ADMIN_CHAT_ID"
 fi
 
 BACKUP_DIR="${PG_BACKUP_DIR:-${ROOT_DIR}/data/pg_backups}"
