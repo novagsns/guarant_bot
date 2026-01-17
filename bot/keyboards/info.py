@@ -23,6 +23,11 @@ def info_menu_kb() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="🛠 Заказ и разработка бота", callback_data="info:order"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="💬 Поддержка", callback_data="support:start"
                 ),
                 InlineKeyboardButton(

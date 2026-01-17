@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from bot.config import Settings
 from bot.db.models import User
 from bot.keyboards.info import (
     faq_back_kb,
@@ -100,10 +102,109 @@ async def info_privacy(callback: CallbackQuery) -> None:
     """
     text = (
         "🔒 <b>Политика конфиденциальности GSNS</b>\n\n"
-        "• Данные используются только для работы сервиса.\n"
-        "• Переписки внутри бота защищены и не публикуются.\n"
-        "• GSNS оставляет за собой право блокировать пользователей за нарушения.\n"
-        "• Использование сервиса означает согласие с правилами."
+        "<b>1. Какие данные мы получаем</b>\n"
+        "• Telegram ID, username, имя профиля.\n"
+        "• Данные объявлений, сделок, отзывов, жалоб и обращений в поддержку.\n"
+        "• Платежные события: сумма, валюта, время, статус (без хранения реквизитов).\n"
+        "• Технические логи для защиты сервиса и качества работы.\n\n"
+        "<b>2. Зачем это нужно</b>\n"
+        "• Для безопасности сделок, подтверждений и уведомлений.\n"
+        "• Для обслуживания пользователей и связи по заявкам.\n"
+        "• Для предотвращения мошенничества и споров.\n\n"
+        "<b>3. Что мы не делаем</b>\n"
+        "• Не продаем и не передаем данные третьим лицам.\n"
+        "• Не публикуем личные переписки и материалы.\n\n"
+        "<b>4. Защита и хранение</b>\n"
+        "• Данные хранятся на защищенной инфраструктуре.\n"
+        "• Доступ ограничен и используется только для поддержки сервиса.\n\n"
+        "<b>5. Сроки хранения</b>\n"
+        "• Данные хранятся столько, сколько нужно для работы сервиса и безопасности.\n"
+        "• Вы можете запросить удаление профиля через поддержку.\n\n"
+        "<b>6. Ваши права</b>\n"
+        "• Запросить исправление или удаление данных.\n"
+        "• Получить ответ по обращению в разумные сроки.\n\n"
+        "<b>7. Контакт</b>\n"
+        "• По любым вопросам пишите в поддержку GSNS.\n\n"
+        "Использование сервиса означает согласие с этой политикой."
+    )
+    await callback.message.edit_text(text, reply_markup=info_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "info:order")
+async def info_order(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Handle info order."""
+    owner_ids = list(settings.owner_ids or [])
+    owners_by_id: dict[int, User] = {}
+
+    if owner_ids:
+        async with sessionmaker() as session:
+            result = await session.execute(
+                select(User).where(User.id.in_(owner_ids))
+            )
+            owners = result.scalars().all()
+            owners_by_id = {owner.id: owner for owner in owners}
+    if not owner_ids:
+        async with sessionmaker() as session:
+            result = await session.execute(select(User).where(User.role == "owner"))
+            owners = result.scalars().all()
+            owners_by_id = {owner.id: owner for owner in owners}
+        owner_ids = list(owners_by_id.keys())
+
+    owner_labels: list[str] = []
+    updated: dict[int, tuple[str, str | None]] = {}
+    for owner_id in owner_ids:
+        username = None
+        full_name = None
+        try:
+            chat = await callback.bot.get_chat(owner_id)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            chat = None
+        if chat:
+            username = chat.username
+            full_name = getattr(chat, "full_name", None)
+        if not username:
+            owner = owners_by_id.get(owner_id)
+            if owner and owner.username:
+                username = owner.username
+                full_name = full_name or owner.full_name
+        if username:
+            owner_labels.append(f"@{username}")
+            owner = owners_by_id.get(owner_id)
+            if owner and owner.username != username:
+                updated[owner_id] = (username, full_name)
+        else:
+            owner_labels.append(f"id:{owner_id}")
+
+    if updated:
+        async with sessionmaker() as session:
+            for owner_id, (username, full_name) in updated.items():
+                owner = await session.get(User, owner_id)
+                if not owner:
+                    continue
+                owner.username = username
+                if full_name:
+                    owner.full_name = full_name
+            await session.commit()
+
+    owner_text = ", ".join(owner_labels) if owner_labels else "—"
+
+    text = (
+        "🛠 <b>Заказ и разработка ботов</b>\n\n"
+        "Создаю ботов и автоматизации под ваши задачи: от идеи до запуска.\n"
+        "Помогаю упаковать продукт, прописать сценарии, сделать удобный UX и\n"
+        "встроить оплату, подписки, аналитику, CRM и поддержку.\n\n"
+        "<b>Что вы получаете</b>\n"
+        "• Проектирование логики и пользовательских сценариев.\n"
+        "• Чистый интерфейс и быстрые ответы для пользователей.\n"
+        "• Интеграции оплат, уведомлений, админ‑панели и статистики.\n"
+        "• Сопровождение после запуска и развитие продукта.\n\n"
+        f"<b>Владелец/контакт:</b> {owner_text}\n"
+        "Пишите в поддержку или напрямую — обсудим задачу и сроки."
     )
     await callback.message.edit_text(text, reply_markup=info_back_kb())
     await callback.answer()

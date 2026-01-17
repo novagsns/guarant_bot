@@ -41,7 +41,7 @@ from bot.handlers.helpers import get_or_create_user
 from bot.handlers.deals import (
     _assign_deal_room,
     _notify_room_pool_low,
-    _release_deal_room,
+    reset_deal_room,
 )
 from bot.keyboards.ads import deal_after_take_kb
 from bot.keyboards.common import OWNER_PANEL_BUTTON, STAFF_PANEL_BUTTON
@@ -1037,6 +1037,12 @@ async def complaint_filter(
     await callback.answer()
 
 
+def _complaint_status_filter(status: str):
+    if status == "closed":
+        return Complaint.status.in_(("closed", "approved", "rejected"))
+    return Complaint.status == status
+
+
 async def _show_complaints(
     callback: CallbackQuery, sessionmaker: async_sessionmaker, status: str
 ) -> None:
@@ -1050,7 +1056,7 @@ async def _show_complaints(
     async with sessionmaker() as session:
         result = await session.execute(
             select(Complaint)
-            .where(Complaint.status == status)
+            .where(_complaint_status_filter(status))
             .order_by(Complaint.id.desc())
             .limit(20)
         )
@@ -1071,6 +1077,47 @@ async def _show_complaints(
         await callback.message.answer(text, reply_markup=complaint_kb(complaint.id))
 
 
+async def _resolve_complaint_action(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+    complaint_id: int,
+    *,
+    status: str,
+    reporter_text: str,
+    admin_text: str,
+) -> None:
+    user = await _load_user(sessionmaker, callback.from_user)
+    if not _is_moderator(user.role):
+        await callback.answer("Нет доступа.")
+        return
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(Complaint).where(Complaint.id == complaint_id)
+        )
+        complaint = result.scalar_one_or_none()
+        if not complaint:
+            await callback.answer("Жалоба не найдена.")
+            return
+        if complaint.status != "open":
+            await callback.answer("Жалоба уже обработана.")
+            return
+        complaint.status = status
+        await session.commit()
+
+    try:
+        await callback.bot.send_message(complaint.reporter_id, reporter_text)
+    except Exception:
+        pass
+    await callback.message.answer(admin_text)
+    await _log_admin(
+        callback.bot,
+        settings,
+        f"{admin_text} #{complaint_id} (модератор {callback.from_user.id})",
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("complaint_close:"))
 async def complaint_close(
     callback: CallbackQuery,
@@ -1084,28 +1131,58 @@ async def complaint_close(
         sessionmaker: Value for sessionmaker.
         settings: Value for settings.
     """
-    user = await _load_user(sessionmaker, callback.from_user)
-    if not _is_moderator(user.role):
-        await callback.answer("Нет доступа.")
-        return
     complaint_id = int(callback.data.split(":")[1])
-    async with sessionmaker() as session:
-        result = await session.execute(
-            select(Complaint).where(Complaint.id == complaint_id)
-        )
-        complaint = result.scalar_one_or_none()
-        if not complaint:
-            await callback.answer("Жалоба не найдена.")
-            return
-        complaint.status = "closed"
-        await session.commit()
-    await callback.message.answer("Жалоба закрыта.")
-    await _log_admin(
-        callback.bot,
+    await _resolve_complaint_action(
+        callback,
+        sessionmaker,
         settings,
-        f"Жалоба закрыта #{complaint_id} (модератор {callback.from_user.id})",
+        complaint_id,
+        status="approved",
+        reporter_text=(
+            f"Жалоба #{complaint_id} подтверждена. Мы свяжемся с вами."
+        ),
+        admin_text="Жалоба подтверждена",
     )
-    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("complaint_approve:"))
+async def complaint_approve(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Handle complaint approve."""
+    complaint_id = int(callback.data.split(":")[1])
+    await _resolve_complaint_action(
+        callback,
+        sessionmaker,
+        settings,
+        complaint_id,
+        status="approved",
+        reporter_text=(
+            f"Жалоба #{complaint_id} подтверждена. Мы свяжемся с вами."
+        ),
+        admin_text="Жалоба подтверждена",
+    )
+
+
+@router.callback_query(F.data.startswith("complaint_reject:"))
+async def complaint_reject(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Handle complaint reject."""
+    complaint_id = int(callback.data.split(":")[1])
+    await _resolve_complaint_action(
+        callback,
+        sessionmaker,
+        settings,
+        complaint_id,
+        status="rejected",
+        reporter_text=f"Жалоба #{complaint_id} отклонена. Спасибо за обращение.",
+        admin_text="Жалоба отклонена",
+    )
 
 
 @router.callback_query(F.data.startswith("complaint_delete_req:"))
@@ -2093,7 +2170,7 @@ async def deal_cancel(
             ref_type="deal",
             ref_id=deal.id,
         )
-        await _release_deal_room(session, deal)
+        await reset_deal_room(callback.bot, session, deal)
         await session.commit()
     await callback.message.answer(f"Сделка #{deal_id} отменена.")
     await _log_admin(
@@ -2221,7 +2298,7 @@ async def export_complaints(
     async with sessionmaker() as session:
         query = select(Complaint).order_by(Complaint.id.desc()).limit(200)
         if status != "all":
-            query = query.where(Complaint.status == status)
+            query = query.where(_complaint_status_filter(status))
         result = await session.execute(query)
         complaints = result.scalars().all()
 

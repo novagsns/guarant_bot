@@ -32,6 +32,7 @@ from bot.handlers import (
 )
 from bot.middlewares import ActionLogMiddleware, AccessMiddleware, ContextMiddleware
 from bot.services.daily_report import daily_report_loop
+from bot.services.market_rates import refresh_usdt_rate_rub, usdt_rate_loop
 from bot.services.topic_activity import topic_activity_loop
 from bot.services.vip_jobs import vip_promotion_loop
 from bot.services.weekly_rewards import weekly_reward_loop
@@ -63,6 +64,7 @@ async def main() -> None:
         allow_destructive=settings.db_allow_destructive_migrations,
     )
     await _ensure_default_games(sessionmaker, settings.default_games)
+    await refresh_usdt_rate_rub()
 
     session = AiohttpSession(timeout=90)
     bot = Bot(
@@ -105,6 +107,7 @@ async def main() -> None:
     dp.include_router(support.router)
 
     asyncio.create_task(daily_report_loop(bot, sessionmaker, settings))
+    asyncio.create_task(usdt_rate_loop())
     asyncio.create_task(vip_promotion_loop(sessionmaker))
     asyncio.create_task(weekly_reward_loop(bot, sessionmaker, settings))
     asyncio.create_task(topic_activity_loop(bot, sessionmaker))

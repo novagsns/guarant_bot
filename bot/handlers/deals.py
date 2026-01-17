@@ -375,7 +375,12 @@ async def _assign_deal_room(
     return room, None
 
 
-async def _release_deal_room(session, deal: Deal) -> None:
+async def _release_deal_room(
+    session,
+    deal: Deal,
+    *,
+    new_invite_link: str | None = None,
+) -> None:
     """Release room assignment after a deal completes or cancels."""
 
     if deal.room_chat_id:
@@ -385,12 +390,56 @@ async def _release_deal_room(session, deal: Deal) -> None:
         room = result.scalar_one_or_none()
         if room:
             room.assigned_deal_id = None
-            room.invite_link = None
+            room.invite_link = new_invite_link
     deal.room_chat_id = None
     deal.room_invite_link = None
     deal.room_ready = False
     _ROOM_SUMMARIES_POSTED.discard(deal.id)
     _ROOM_GUARANTOR_CONTROLS_POSTED.discard(deal.id)
+
+
+async def reset_deal_room(bot, session, deal: Deal) -> None:
+    """Remove participants, rotate invite link, and return the room to the pool."""
+    chat_id = deal.room_chat_id
+    if not chat_id:
+        await _release_deal_room(session, deal)
+        return
+
+    result = await session.execute(
+        select(DealRoom).where(DealRoom.chat_id == chat_id)
+    )
+    room = result.scalar_one_or_none()
+    old_invite = deal.room_invite_link or (room.invite_link if room else None)
+
+    participant_ids = {
+        user_id
+        for user_id in (deal.buyer_id, deal.seller_id, deal.guarantee_id)
+        if user_id
+    }
+    for user_id in participant_ids:
+        try:
+            await bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
+        except Exception:
+            pass
+        try:
+            await bot.unban_chat_member(chat_id, user_id)
+        except Exception:
+            pass
+
+    if old_invite:
+        try:
+            await bot.revoke_chat_invite_link(chat_id, old_invite)
+        except Exception:
+            pass
+
+    new_invite_link = None
+    try:
+        invite = await bot.create_chat_invite_link(chat_id, name="GSNS deal room")
+        new_invite_link = invite.invite_link
+    except Exception:
+        new_invite_link = None
+
+    await _release_deal_room(session, deal, new_invite_link=new_invite_link)
 
 
 async def _mark_room_ready_and_notify(

@@ -32,6 +32,12 @@ def services_menu_kb(is_admin: bool, roulette_cost: str) -> InlineKeyboardMarkup
                 text="Пополнить GSNS Coins", callback_data="topup:start"
             )
         ],
+        [
+            InlineKeyboardButton(
+                text="Выгодный донат для вашей игры",
+                url="https://donatov.net/ref/GSNS_MLBB",
+            )
+        ],
     ]
     if is_admin:
         rows.append(

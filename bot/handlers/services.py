@@ -23,7 +23,6 @@ from bot.db.models import (
     WalletTransaction,
 )
 from bot.handlers.helpers import get_or_create_user
-from bot.keyboards.common import referral_kb
 from bot.keyboards.services import (
     my_service_kb,
     roulette_confirm_kb,
@@ -457,11 +456,6 @@ async def services_menu(
     await message.answer(
         "Раздел услуг GSNS:",
         reply_markup=services_menu_kb(is_admin, str(ROULETTE_SPIN_COST)),
-    )
-    await message.answer(f"Стоимость крутки: {ROULETTE_SPIN_COST} GSNS Coins.")
-    await message.answer(
-        "Выгодный донат для вашей игры:",
-        reply_markup=referral_kb(),
     )
 
 

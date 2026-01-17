@@ -233,13 +233,20 @@ def complaint_kb(complaint_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Закрыть", callback_data=f"complaint_close:{complaint_id}"
+                    text="✅ Подтвердить",
+                    callback_data=f"complaint_approve:{complaint_id}",
                 ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"complaint_reject:{complaint_id}",
+                ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="🗑 Удалить",
                     callback_data=f"complaint_delete_req:{complaint_id}",
-                ),
-            ]
+                )
+            ],
         ]
     )
 
