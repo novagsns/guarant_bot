@@ -61,56 +61,84 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Lookup source for IPs (provider: ipinfo.io)"
+PYTHON=""
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON="python"
+fi
+
+PYINFO_CODE=""
+PYAPI_CODE=""
+if [[ -n "$PYTHON" ]]; then
+  PYINFO_CODE=$(cat <<'PY'
+import json
+import sys
+
+ip = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+if data.get("error"):
+    sys.exit(1)
+
+city = data.get("city") or "-"
+region = data.get("region") or "-"
+country = data.get("country") or "-"
+org = data.get("org") or "-"
+loc = data.get("loc") or "-"
+tz = data.get("timezone") or "-"
+print(f"{ip} | {country} {region} {city} | {org} | loc={loc} | tz={tz}")
+PY
+  )
+  PYAPI_CODE=$(cat <<'PY'
+import json
+import sys
+
+ip = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+if data.get("status") != "success":
+    sys.exit(1)
+
+city = data.get("city") or "-"
+region = data.get("regionName") or "-"
+country = data.get("country") or "-"
+org = data.get("org") or data.get("isp") or "-"
+lat = data.get("lat")
+lon = data.get("lon")
+loc = f"{lat},{lon}" if lat is not None and lon is not None else "-"
+tz = data.get("timezone") or "-"
+print(f"{ip} | {country} {region} {city} | {org} | loc={loc} | tz={tz}")
+PY
+  )
+fi
+
+echo "Lookup source for IPs (provider: ipinfo.io, fallback: ip-api.com)"
 for ip in "${IPS[@]}"; do
   json=$(curl -sS "https://ipinfo.io/${ip}/json" || true)
-  if [[ -z "$json" ]]; then
-    echo "$ip | lookup failed"
-    continue
+  output=""
+  if [[ -n "$PYTHON" ]]; then
+    if output=$(printf '%s' "$json" | "$PYTHON" -c "$PYINFO_CODE" "$ip"); then
+      echo "$output"
+      continue
+    fi
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$json" | python3 - "$ip" <<'PY'
-import json
-import sys
 
-ip = sys.argv[1]
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print(f"{ip} | parse failed")
-    sys.exit(0)
-
-city = data.get("city") or "-"
-region = data.get("region") or "-"
-country = data.get("country") or "-"
-org = data.get("org") or "-"
-loc = data.get("loc") or "-"
-tz = data.get("timezone") or "-"
-print(f"{ip} | {country} {region} {city} | {org} | loc={loc} | tz={tz}")
-PY
-  elif command -v python >/dev/null 2>&1; then
-    printf '%s' "$json" | python - "$ip" <<'PY'
-import json
-import sys
-
-ip = sys.argv[1]
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print(f"{ip} | parse failed")
-    sys.exit(0)
-
-city = data.get("city") or "-"
-region = data.get("region") or "-"
-country = data.get("country") or "-"
-org = data.get("org") or "-"
-loc = data.get("loc") or "-"
-tz = data.get("timezone") or "-"
-print(f"{ip} | {country} {region} {city} | {org} | loc={loc} | tz={tz}")
-PY
+  json=$(curl -sS "http://ip-api.com/json/${ip}?fields=status,message,country,regionName,city,org,isp,lat,lon,timezone" || true)
+  if [[ -n "$PYTHON" ]]; then
+    if output=$(printf '%s' "$json" | "$PYTHON" -c "$PYAPI_CODE" "$ip"); then
+      echo "$output"
+      continue
+    fi
   else
     city=$(printf '%s' "$json" | sed -n 's/.*"city":"\([^"]*\)".*/\1/p')
-    region=$(printf '%s' "$json" | sed -n 's/.*"region":"\([^"]*\)".*/\1/p')
+    region=$(printf '%s' "$json" | sed -n 's/.*"regionName":"\([^"]*\)".*/\1/p')
     country=$(printf '%s' "$json" | sed -n 's/.*"country":"\([^"]*\)".*/\1/p')
     org=$(printf '%s' "$json" | sed -n 's/.*"org":"\([^"]*\)".*/\1/p')
     city=${city:-"-"}
@@ -118,5 +146,8 @@ PY
     country=${country:-"-"}
     org=${org:-"-"}
     echo "$ip | $country $region $city | $org"
+    continue
   fi
+
+  echo "$ip | lookup failed"
 done

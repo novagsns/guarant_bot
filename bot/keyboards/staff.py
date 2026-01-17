@@ -15,26 +15,26 @@ def owner_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="?? ?????????? ??????????", callback_data="owner:staff"
+                    text="👥 Управление персоналом", callback_data="owner:staff"
                 ),
-                InlineKeyboardButton(text="?? ????", callback_data="owner:roles"),
+                InlineKeyboardButton(text="🎭 Роли", callback_data="owner:roles"),
             ],
             [
                 InlineKeyboardButton(
-                    text="?? ?????????", callback_data="owner:moderation"
+                    text="🛡 Модерация", callback_data="owner:moderation"
                 ),
-                InlineKeyboardButton(text="? ?????", callback_data="owner:disputes"),
+                InlineKeyboardButton(text="⚖️ Споры", callback_data="owner:disputes"),
             ],
             [
-                InlineKeyboardButton(text="? ??????", callback_data="owner:reviews"),
+                InlineKeyboardButton(text="⭐ Отзывы", callback_data="owner:reviews"),
                 InlineKeyboardButton(
-                    text="?? ?????? ?????????", callback_data="owner:design_tasks"
+                    text="🎨 Задачи дизайнера", callback_data="owner:design_tasks"
                 ),
             ],
-            [InlineKeyboardButton(text="?? Trust Score", callback_data="owner:trust")],
+            [InlineKeyboardButton(text="🧭 Trust Score", callback_data="owner:trust")],
             [
                 InlineKeyboardButton(
-                    text="?? ???? ????????", callback_data="scammers:menu"
+                    text="🧾 База скамеров", callback_data="scammers:menu"
                 )
             ],
         ]
@@ -51,14 +51,14 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="?? ?????????", callback_data="owner:moderation"
+                    text="🛡 Модерация", callback_data="owner:moderation"
                 ),
-                InlineKeyboardButton(text="? ?????", callback_data="owner:disputes"),
+                InlineKeyboardButton(text="⚖️ Споры", callback_data="owner:disputes"),
             ],
             [
-                InlineKeyboardButton(text="? ??????", callback_data="owner:reviews"),
+                InlineKeyboardButton(text="⭐ Отзывы", callback_data="owner:reviews"),
                 InlineKeyboardButton(
-                    text="?? ?????? ?????????", callback_data="owner:design_tasks"
+                    text="🎨 Задачи дизайнера", callback_data="owner:design_tasks"
                 ),
             ],
         ]
@@ -74,24 +74,24 @@ def guarantor_panel_kb(on_shift: bool) -> InlineKeyboardMarkup:
     Returns:
         Return value.
     """
-    shift_label = "?? ?? ?????" if on_shift else "? ?? ?? ?????"
+    shift_label = "🟢 На смене" if on_shift else "🔴 Не на смене"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="?? ??? ??????", callback_data="guarantor:deals"
+                    text="📄 Мои сделки", callback_data="guarantor:deals"
                 ),
                 InlineKeyboardButton(
-                    text="? ??? ??????", callback_data="guarantor:reviews"
+                    text="⭐ Мои отзывы", callback_data="guarantor:reviews"
                 ),
             ],
             [
-                InlineKeyboardButton(text="? ????", callback_data="guarantor:dispute"),
+                InlineKeyboardButton(text="⚖️ Спор", callback_data="guarantor:dispute"),
                 InlineKeyboardButton(text=shift_label, callback_data="guarantor:shift"),
             ],
             [
                 InlineKeyboardButton(
-                    text="?? ???????? ????????????", callback_data="guarantor:check"
+                    text="🔎 Проверить пользователя", callback_data="guarantor:check"
                 )
             ],
         ]
@@ -108,15 +108,15 @@ def moderator_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="?? ????????? ??????????", callback_data="moderator:ads"
+                    text="🛡 Модерация объявлений", callback_data="moderator:ads"
                 ),
                 InlineKeyboardButton(
-                    text="?? ??????", callback_data="moderator:complaints"
+                    text="🚨 Жалобы", callback_data="moderator:complaints"
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="?? ???? ????????", callback_data="scammers:menu"
+                    text="🧾 База скамеров", callback_data="scammers:menu"
                 )
             ],
         ]
@@ -131,7 +131,7 @@ def designer_panel_kb() -> InlineKeyboardMarkup:
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="?? ??????", callback_data="designer:tasks")]
+            [InlineKeyboardButton(text="🎨 Задачи", callback_data="designer:tasks")]
         ]
     )
 
@@ -146,10 +146,10 @@ def staff_manage_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="????????? ????", callback_data="owner:set_role"
+                    text="Назначить роль", callback_data="owner:set_role"
                 ),
                 InlineKeyboardButton(
-                    text="?????? ?????????", callback_data="owner:list_staff"
+                    text="Список персонала", callback_data="owner:list_staff"
                 ),
             ]
         ]
