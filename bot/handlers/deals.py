@@ -220,6 +220,27 @@ def _prechat_ad_context(ad: Ad, game: Game | None = None) -> str:
     return "\n".join(lines)
 
 
+def _prechat_short_context(data: dict) -> str:
+    """Build a compact context line for prechat messages."""
+    ad_id = data.get("ad_id")
+    title = data.get("ad_title") or "без названия"
+    if ad_id:
+        line = f"Объявление #{ad_id}: {title}"
+    else:
+        line = f"Объявление: {title}"
+    game = data.get("ad_game")
+    if game:
+        line = f"{line}\nИгра: {game}"
+    return line
+
+
+def _tg_user_label(user) -> str:
+    """Format a Telegram user label for chat context."""
+    if user.username:
+        return f"@{user.username} (id:{user.id})"
+    return f"id:{user.id}"
+
+
 async def _get_prechat_peer(
     state: FSMContext,
     *,
@@ -921,9 +942,11 @@ async def _start_deal_action(
                 await _clear_prechat_peer(
                     state, bot_id=callback.bot.id, peer_id=old_peer_id
                 )
+                old_context = _prechat_short_context(current)
                 try:
                     await callback.bot.send_message(
-                        old_peer_id, "Покупатель завершил диалог."
+                        old_peer_id,
+                        f"Покупатель завершил диалог.\n{old_context}",
                     )
                 except Exception:
                     pass
@@ -931,20 +954,24 @@ async def _start_deal_action(
             await state.set_state(PreChatStates.in_chat)
             await state.update_data(
                 ad_id=ad.id,
+                ad_title=ad.title,
+                ad_game=game.name if game else None,
                 peer_id=seller.id,
                 role="buyer",
                 ad_kind=ad.ad_kind,
             )
+            seller_label = _tg_user_label(seller)
+            buyer_label = _tg_user_label(callback.from_user)
             ad_context = _prechat_ad_context(ad, game)
             await callback.message.answer(
-                f"💬 Диалог с продавцом открыт.\n{ad_context}\n\n"
+                f"💬 Диалог с продавцом {seller_label} открыт.\n{ad_context}\n\n"
                 "Обсудите условия и цену.",
                 reply_markup=prechat_finish_kb(ad.id),
             )
             await callback.bot.send_message(
                 seller.id,
                 (
-                    "💬 Покупатель хочет связаться по вашему объявлению.\n"
+                    f"💬 Покупатель {buyer_label} хочет связаться по вашему объявлению.\n"
                     f"{ad_context}\n\n"
                     "Нажмите кнопку ниже, чтобы открыть диалог."
                 ),
@@ -1076,6 +1103,9 @@ async def prechat_open(
         if buyer_id == seller.id:
             await callback.answer("Неверный покупатель.")
             return
+        result = await session.execute(select(User).where(User.id == buyer_id))
+        buyer = result.scalar_one_or_none()
+        buyer_label = _tg_user_label(buyer) if buyer else f"id:{buyer_id}"
 
     peer_state, peer_data = await _get_prechat_peer(
         state, bot_id=callback.bot.id, peer_id=buyer_id
@@ -1095,9 +1125,11 @@ async def prechat_open(
         await _clear_prechat_peer(
             state, bot_id=callback.bot.id, peer_id=prev_peer_id
         )
+        old_context = _prechat_short_context(current)
         try:
             await callback.bot.send_message(
-                prev_peer_id, "Продавец завершил диалог."
+                prev_peer_id,
+                f"Продавец завершил диалог.\n{old_context}",
             )
         except Exception:
             pass
@@ -1106,12 +1138,15 @@ async def prechat_open(
     await state.set_state(PreChatStates.in_chat)
     await state.update_data(
         ad_id=ad_id,
+        ad_title=ad.title,
+        ad_game=game.name if game else None,
         peer_id=buyer_id,
         role="seller",
+        ad_kind=ad.ad_kind,
     )
     ad_context = _prechat_ad_context(ad, game)
     await callback.message.answer(
-        f"💬 Диалог открыт по объявлению.\n{ad_context}\n\n"
+        f"💬 Диалог с покупателем {buyer_label} открыт.\n{ad_context}\n\n"
         "Обсудите детали сделки. Для выхода — /exit."
     )
     await callback.answer()
@@ -1134,8 +1169,11 @@ async def prechat_finish(callback: CallbackQuery, state: FSMContext) -> None:
         await _clear_prechat_peer(
             state, bot_id=callback.bot.id, peer_id=peer_id
         )
+        context = _prechat_short_context(data)
         try:
-            await callback.bot.send_message(peer_id, "Покупатель завершил диалог.")
+            await callback.bot.send_message(
+                peer_id, f"Покупатель завершил диалог.\n{context}"
+            )
         except Exception:
             pass
     await state.update_data(chat_closed=True)
@@ -1158,6 +1196,7 @@ async def prechat_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     """
     data = await state.get_data()
     peer_id = data.get("peer_id")
+    context = _prechat_short_context(data)
     await state.clear()
     await callback.message.answer("✅ Диалог завершен.")
     if peer_id:
@@ -1165,7 +1204,9 @@ async def prechat_cancel(callback: CallbackQuery, state: FSMContext) -> None:
             state, bot_id=callback.bot.id, peer_id=peer_id
         )
         try:
-            await callback.bot.send_message(peer_id, "Покупатель завершил диалог.")
+            await callback.bot.send_message(
+                peer_id, f"Покупатель завершил диалог.\n{context}"
+            )
         except Exception:
             pass
     await callback.answer()
@@ -1240,8 +1281,11 @@ async def prechat_relay(
         await _clear_prechat_peer(
             state, bot_id=message.bot.id, peer_id=peer_id
         )
+        context = _prechat_short_context(data)
         try:
-            await message.bot.send_message(peer_id, "Диалог завершен.")
+            await message.bot.send_message(
+                peer_id, f"Диалог завершен.\n{context}"
+            )
         except Exception:
             pass
         await message.answer("✅ Диалог завершен.")
@@ -1290,7 +1334,18 @@ async def prechat_relay(
         return
 
     if message.text:
-        await message.bot.send_message(peer_id, message.text)
+        if role == "buyer":
+            sender_role = "Покупатель"
+        elif role == "seller":
+            sender_role = "Продавец"
+        else:
+            sender_role = "Собеседник"
+        sender_label = _tg_user_label(message.from_user)
+        context = _prechat_short_context(data)
+        await message.bot.send_message(
+            peer_id,
+            f"{sender_role} {sender_label}\n{context}\n\n{message.text}",
+        )
 
 
 @router.message(PreChatStates.buy_price)
@@ -1344,11 +1399,12 @@ async def prechat_buy_price(
             return
 
     ad_context = _prechat_ad_context(ad, game)
+    buyer_label = _tg_user_label(message.from_user)
     price_cents = _price_to_cents(price)
     await message.bot.send_message(
         seller.id,
         (
-            "🧾 Запрос покупки по объявлению.\n"
+            f"🧾 Запрос покупки от {buyer_label} по объявлению.\n"
             f"{ad_context}\n\n"
             f"💰 Цена: {price} ₽\n"
             "Подтвердите или измените цену."
