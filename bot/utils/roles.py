@@ -48,6 +48,7 @@ def role_label(role: str) -> str:
         "moderator": "Модератор",
         "designer": "Дизайнер",
         "guarantor": "Гарант",
+        "banned": "Забанен",
         "user": "Пользователь",
     }
     return mapping.get(role, role)

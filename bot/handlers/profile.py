@@ -117,10 +117,10 @@ async def _build_review_page(
             select(Review, Deal, User)
             .join(Deal, Deal.id == Review.deal_id)
             .join(User, User.id == Review.author_id)
-            .join(guarantor, guarantor.id == Deal.guarantee_id)
+            .join(guarantor, guarantor.id == Review.target_id)
             .where(
                 Review.status == "active",
-                Deal.guarantee_id.is_not(None),
+                Review.target_id == Deal.guarantee_id,
                 guarantor.role == "guarantor",
             )
             .order_by(Deal.id.desc(), Review.id.asc())
@@ -149,7 +149,7 @@ async def _build_review_page(
         elif author.id == deal.buyer_id:
             entry["buyer"]["comment"] = review.comment
             entry["buyer"]["rating"] = review.rating
-        entry["guarantor_id"] = deal.guarantee_id
+        entry["guarantor_id"] = review.target_id
     async with sessionmaker() as session:
         guarantor_ids = {
             entry["guarantor_id"] for entry in entries.values() if entry["guarantor_id"]

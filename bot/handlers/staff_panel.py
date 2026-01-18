@@ -406,6 +406,11 @@ async def _resolve_user_id(session, token: str) -> int | None:
     return user.id if user else None
 
 
+def _ban_reason_text(reason: str | None) -> str:
+    reason = (reason or "").strip()
+    return reason if reason else "нарушение правил GSNS"
+
+
 async def _recalc_rating(session, user_id: int) -> None:
     """Handle recalc rating.
 
@@ -722,6 +727,144 @@ async def fire_staff(
         message.bot,
         settings,
         f"Staff removed: {user_id} (by {owner.id})",
+    )
+
+
+@router.message(F.text.startswith("/ban6m"))
+async def ban_user_6m(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Ban a user in the bot for 6 months."""
+    async with sessionmaker() as session:
+        actor = await get_or_create_user(session, message.from_user)
+        if not _is_admin(actor.role) and not is_owner(
+            actor.role, settings.owner_ids, actor.id
+        ):
+            return
+
+        target_user = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+        elif message.forward_from:
+            target_user = message.forward_from
+
+        parts = message.text.split() if message.text else []
+        if target_user:
+            target_id = target_user.id
+            reason = " ".join(parts[1:]).strip() if len(parts) > 1 else None
+        else:
+            if len(parts) < 2:
+                await message.answer("Использование: /ban6m user_id [причина]")
+                return
+            target_id = await _resolve_user_id(session, parts[1])
+            if not target_id:
+                await message.answer("Пользователь не найден.")
+                return
+            reason = " ".join(parts[2:]).strip() if len(parts) > 2 else None
+
+        result = await session.execute(select(User).where(User.id == target_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            await message.answer("Пользователь не найден. Пусть нажмет /start.")
+            return
+        if is_owner(user.role, settings.owner_ids, user.id):
+            await message.answer("Нельзя забанить владельца.")
+            return
+
+        ban_until = datetime.now(timezone.utc) + timedelta(days=180)
+        user.role = "banned"
+        user.ban_until = ban_until
+        await session.commit()
+
+    reason_text = _ban_reason_text(reason)
+    notify_text = (
+        "🚫 Ваш доступ к GSNS Trade ограничен на 6 месяцев.\n"
+        f"Причина: {reason_text}\n"
+        "Если считаете это ошибкой, напишите в поддержку."
+    )
+    try:
+        await message.bot.send_message(target_id, notify_text)
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    except Exception:
+        pass
+
+    until_label = ban_until.strftime("%d.%m.%Y")
+    await message.answer(f"Бан выдан: {target_id} до {until_label}.")
+    await _log_admin(
+        message.bot,
+        settings,
+        f"Бан 6м: {target_id} до {until_label} (кто: {actor.id})",
+    )
+
+
+@router.message(F.text.startswith("/banperm"))
+async def ban_user_perm(
+    message: Message,
+    sessionmaker: async_sessionmaker,
+    settings: Settings,
+) -> None:
+    """Ban a user in the bot permanently."""
+    async with sessionmaker() as session:
+        actor = await get_or_create_user(session, message.from_user)
+        if not _is_admin(actor.role) and not is_owner(
+            actor.role, settings.owner_ids, actor.id
+        ):
+            return
+
+        target_user = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+        elif message.forward_from:
+            target_user = message.forward_from
+
+        parts = message.text.split() if message.text else []
+        if target_user:
+            target_id = target_user.id
+            reason = " ".join(parts[1:]).strip() if len(parts) > 1 else None
+        else:
+            if len(parts) < 2:
+                await message.answer("Использование: /banperm user_id [причина]")
+                return
+            target_id = await _resolve_user_id(session, parts[1])
+            if not target_id:
+                await message.answer("Пользователь не найден.")
+                return
+            reason = " ".join(parts[2:]).strip() if len(parts) > 2 else None
+
+        result = await session.execute(select(User).where(User.id == target_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            await message.answer("Пользователь не найден. Пусть нажмет /start.")
+            return
+        if is_owner(user.role, settings.owner_ids, user.id):
+            await message.answer("Нельзя забанить владельца.")
+            return
+
+        user.role = "banned"
+        user.ban_until = None
+        await session.commit()
+
+    reason_text = _ban_reason_text(reason)
+    notify_text = (
+        "🚫 Ваш доступ к GSNS Trade ограничен навсегда.\n"
+        f"Причина: {reason_text}\n"
+        "Если считаете это ошибкой, напишите в поддержку."
+    )
+    try:
+        await message.bot.send_message(target_id, notify_text)
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    except Exception:
+        pass
+
+    await message.answer(f"Перманентный бан: {target_id}.")
+    await _log_admin(
+        message.bot,
+        settings,
+        f"Бан навсегда: {target_id} (кто: {actor.id})",
     )
 
 

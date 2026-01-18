@@ -38,6 +38,7 @@ class User(Base):
         referrer_id: Attribute value.
         vip_until: Attribute value.
         free_fee_until: Attribute value.
+        ban_until: Attribute value.
         paid_broadcasts_date: Attribute value.
         paid_broadcasts_count: Attribute value.
         created_at: Attribute value.
@@ -58,6 +59,7 @@ class User(Base):
     referrer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     vip_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     free_fee_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ban_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_broadcasts_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )

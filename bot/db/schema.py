@@ -51,6 +51,7 @@ async def apply_schema_updates(conn: AsyncConnection, dialect_name: str) -> None
     await _ensure_ads_media_columns(conn, dialect_name)
     await _ensure_user_profile_columns(conn, dialect_name)
     await _ensure_user_vip_columns(conn, dialect_name)
+    await _ensure_user_ban_columns(conn, dialect_name)
     await _ensure_user_trust_columns(conn, dialect_name)
     await _ensure_ads_moderation_columns(conn, dialect_name)
     await _ensure_topup_columns(conn, dialect_name)
@@ -232,6 +233,25 @@ async def _ensure_user_vip_columns(conn: AsyncConnection, dialect_name: str) -> 
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN paid_broadcasts_count INTEGER DEFAULT 0")
         )
+
+
+async def _ensure_user_ban_columns(conn: AsyncConnection, dialect_name: str) -> None:
+    """Handle ensure user ban columns.
+
+    Args:
+        conn: Value for conn.
+        dialect_name: Value for dialect_name.
+    """
+    result = await conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users'"
+        )
+    )
+    columns = {row[0] for row in result.fetchall()}
+
+    if "ban_until" not in columns:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN ban_until TIMESTAMP"))
 
 
 async def _ensure_topup_columns(conn: AsyncConnection, dialect_name: str) -> None:

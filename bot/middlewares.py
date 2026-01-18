@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Awaitable, Callable, Dict
 
@@ -114,7 +114,14 @@ class AccessMiddleware(BaseMiddleware):
         async with self._sessionmaker() as session:
             result = await session.execute(select(User).where(User.id == user.id))
             db_user = result.scalar_one_or_none()
-            # Only scammers are blocked from using the bot; chat bans do not apply here.
+            if db_user and db_user.role == "banned":
+                if _ban_active(db_user.ban_until):
+                    return await self._block_if_not_support(event, data, handler)
+                db_user.role = "user"
+                db_user.ban_until = None
+                await session.commit()
+
+            # Scammers and bot-level bans are blocked here; chat bans do not apply here.
             scammer = await find_scammer(
                 session, user_id=user.id, username=user.username
             )
@@ -125,6 +132,7 @@ class AccessMiddleware(BaseMiddleware):
             db_user = result.scalar_one_or_none()
             if db_user and db_user.role != "banned":
                 db_user.role = "banned"
+                db_user.ban_until = None
                 await apply_trust_event(
                     session,
                     user.id,
@@ -173,6 +181,14 @@ class AccessMiddleware(BaseMiddleware):
             return None
 
         return await handler(event, data)
+
+
+def _ban_active(ban_until: datetime | None) -> bool:
+    if ban_until is None:
+        return True
+    if ban_until.tzinfo is None or ban_until.tzinfo.utcoffset(ban_until) is None:
+        return ban_until >= datetime.utcnow()
+    return ban_until >= datetime.now(timezone.utc)
 
 
 class ActionLogMiddleware(BaseMiddleware):

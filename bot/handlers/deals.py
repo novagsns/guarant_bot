@@ -940,6 +940,22 @@ def _confirm_start_deal_kb(action: str, ad_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _confirm_prechat_open_kb(ad_id: int, buyer_id: int) -> InlineKeyboardMarkup:
+    """Build a confirmation keyboard for opening prechat."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да", callback_data=f"prechat_open_yes:{ad_id}:{buyer_id}"
+                ),
+                InlineKeyboardButton(
+                    text="Нет", callback_data=f"prechat_open_no:{ad_id}:{buyer_id}"
+                ),
+            ]
+        ]
+    )
+
+
 async def _start_deal_action(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker,
@@ -1110,19 +1126,51 @@ async def start_deal_confirm_no(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("prechat_open:"))
-async def prechat_open(
+async def prechat_open_confirm(
     callback: CallbackQuery, state: FSMContext, sessionmaker: async_sessionmaker
 ) -> None:
-    """Handle prechat open.
-
-    Args:
-        callback: Value for callback.
-        state: Value for state.
-        sessionmaker: Value for sessionmaker.
-    """
+    """Handle prechat open confirmation prompt."""
     _, ad_id_raw, buyer_id_raw = callback.data.split(":")
     ad_id = int(ad_id_raw)
     buyer_id = int(buyer_id_raw)
+    await callback.message.answer(
+        "Открыть диалог с покупателем?",
+        reply_markup=_confirm_prechat_open_kb(ad_id, buyer_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("prechat_open_yes:"))
+async def prechat_open_yes(
+    callback: CallbackQuery, state: FSMContext, sessionmaker: async_sessionmaker
+) -> None:
+    """Handle prechat open confirmation yes."""
+    _, ad_id_raw, buyer_id_raw = callback.data.split(":")
+    await _open_prechat(
+        callback,
+        state=state,
+        sessionmaker=sessionmaker,
+        ad_id=int(ad_id_raw),
+        buyer_id=int(buyer_id_raw),
+    )
+
+
+@router.callback_query(F.data.startswith("prechat_open_no:"))
+async def prechat_open_no(callback: CallbackQuery) -> None:
+    """Handle prechat open confirmation no."""
+    await callback.message.answer("❌ Действие отменено.")
+    await callback.answer()
+
+
+async def _open_prechat(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker,
+    ad_id: int,
+    buyer_id: int,
+) -> None:
+    """Open a prechat dialog after confirmation."""
     async with sessionmaker() as session:
         result = await session.execute(
             select(Ad, Game, User)
