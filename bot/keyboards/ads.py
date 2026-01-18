@@ -91,9 +91,6 @@ def exchange_actions_kb(ad_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Связаться", callback_data=f"contact:{ad_id}"
                 ),
-                InlineKeyboardButton(
-                    text="Обменять", callback_data=f"exchange:{ad_id}"
-                ),
             ],
             [
                 InlineKeyboardButton(

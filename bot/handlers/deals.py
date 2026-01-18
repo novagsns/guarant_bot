@@ -906,6 +906,13 @@ async def start_deal(
     """
     action, raw_id = callback.data.split(":")
     ad_id = int(raw_id)
+    if action == "exchange":
+        await callback.message.answer(
+            "Обмен можно начать только после диалога. "
+            "Нажмите «Связаться», обсудите условия и завершите диалог."
+        )
+        await callback.answer()
+        return
     prompt = {
         "buy": "Подтвердить создание сделки?",
         "contact": "Открыть диалог с продавцом?",
@@ -1018,11 +1025,9 @@ async def _start_deal_action(
             return
 
         if action == "exchange":
-            await state.clear()
-            await state.update_data(ad_id=ad.id)
-            await state.set_state(ExchangeStates.addon)
             await callback.message.answer(
-                "💰 Укажите доплату в ₽. Если без доплаты — 0."
+                "Обмен можно начать только после диалога. "
+                "Нажмите «Связаться», обсудите условия и завершите диалог."
             )
             await callback.answer()
             return
@@ -1293,6 +1298,12 @@ async def prechat_exchange(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("role") != "buyer":
         await callback.answer("Доступно только покупателю.")
+        return
+    if data.get("ad_kind") != "exchange":
+        await callback.answer("Обмен доступен только для обменных объявлений.")
+        return
+    if not data.get("chat_closed"):
+        await callback.answer("Сначала завершите диалог.")
         return
     ad_id = int(callback.data.split(":")[1])
     await state.clear()
