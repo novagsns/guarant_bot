@@ -73,7 +73,6 @@ from bot.services.trust import (
     rollback_trust_event,
     set_trust_frozen,
 )
-from bot.utils.broadcasts import create_broadcast_request
 from bot.utils.vip import free_fee_active, is_vip_until
 from bot.utils.admin_target import (
     clear_admin_target,
@@ -2599,9 +2598,10 @@ async def staff_broadcast(
     """
     async with sessionmaker() as session:
         sender = await get_or_create_user(session, message.from_user)
-        if not _is_admin(sender.role) and not is_owner(
-            sender.role, settings.owner_ids, sender.id
-        ):
+        if not is_owner(sender.role, settings.owner_ids, sender.id):
+            return
+        if message.chat.type != "private":
+            await message.answer("Команда доступна только в ЛС бота.")
             return
         raw_text = (message.text or "").strip()
         parts = raw_text.split(maxsplit=1)
@@ -2609,16 +2609,37 @@ async def staff_broadcast(
             await message.answer("Формат: /broadcast текст")
             return
         text = parts[1].strip()
-        await create_broadcast_request(
-            session,
-            message.bot,
-            settings,
-            creator_id=sender.id,
-            text=text,
-            kind="staff",
-            cost=0,
+
+        room_result = await session.execute(select(DealRoom.chat_id))
+        room_ids = {
+            room_id
+            for room_id in room_result.scalars().all()
+            if room_id is not None
+        }
+
+        result = await session.execute(select(User.id))
+        user_ids = [
+            user_id
+            for user_id in result.scalars().all()
+            if user_id not in room_ids
+        ]
+
+    await message.answer("Рассылка запущена.")
+
+    async def _run_broadcast() -> None:
+        sent = 0
+        failed = 0
+        for user_id in user_ids:
+            ok = await _send_broadcast_message(message.bot, user_id, text)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+        await message.answer(
+            f"Рассылка завершена. Отправлено: {sent}. Ошибки: {failed}."
         )
-    await message.answer("Запрос рассылки отправлен на модерацию.")
+
+    asyncio.create_task(_run_broadcast())
 
 
 @router.message(F.text.startswith("/set_vip"))
